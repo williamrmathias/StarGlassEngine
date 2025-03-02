@@ -17,7 +17,6 @@
 
 // stl
 #include <vector>
-#include <optional>
 
 class RenderEngine
 {
@@ -37,6 +36,10 @@ public:
 
     VkSurfaceKHR surface;
     VkSwapchainKHR swapchain;
+    std::vector<VkImage> swapchainImages;
+    std::vector<VkImageView> swapchainImageViews;
+    VkFormat swapchainFormat;
+    VkExtent2D swapchainExtent;
 
     void init(SDL_Window* window);
     void cleanup();

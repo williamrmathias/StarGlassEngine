@@ -56,7 +56,7 @@ void RenderEngine::init(SDL_Window* window)
 
 void RenderEngine::cleanup()
 {
-    vkDestroySwapchainKHR(device, swapchain, nullptr);
+    vkDestroySwapchainKHR(device, swapchain, nullptr); // also destroys swapchain images
 
     vkDestroyDevice(device, nullptr);
 
@@ -281,7 +281,7 @@ void RenderEngine::initSwapchain()
     swapchainInfo.pNext = nullptr;
     swapchainInfo.flags = 0;
     swapchainInfo.surface = surface;
-    swapchainInfo.minImageCount = std::min(uint32_t(3), surfaceCaps.maxImageCount); // use triple buffering if able
+    swapchainInfo.minImageCount = std::min(surfaceCaps.minImageCount + 1, surfaceCaps.maxImageCount);
     swapchainInfo.imageFormat = formats[0].format;
     swapchainInfo.imageColorSpace = formats[0].colorSpace;
     swapchainInfo.imageExtent = surfaceCaps.currentExtent;
@@ -297,4 +297,14 @@ void RenderEngine::initSwapchain()
     swapchainInfo.oldSwapchain = VK_NULL_HANDLE;
 
     VK_CHECK(vkCreateSwapchainKHR(device, &swapchainInfo, nullptr, &swapchain));
+
+    // create swapchain image structs
+    swapchainFormat = formats[0].format;
+    swapchainExtent = surfaceCaps.currentExtent;
+
+    uint32_t swapchainImageCount;
+    vkGetSwapchainImagesKHR(device, swapchain, &swapchainImageCount, nullptr);
+
+    swapchainImages.resize(swapchainImageCount);
+    vkGetSwapchainImagesKHR(device, swapchain, &swapchainImageCount, swapchainImages.data());
 }
