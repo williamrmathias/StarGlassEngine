@@ -37,13 +37,13 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
 void RenderEngine::init(SDL_Window* window)
 {
     // Get WSI extensions from SDL (we can add more if we like - we just can't remove these)
-    unsigned extension_count;
-    SDL_CHECK(SDL_Vulkan_GetInstanceExtensions(window, &extension_count, nullptr));
+    unsigned instExtensionCount;
+    SDL_CHECK(SDL_Vulkan_GetInstanceExtensions(window, &instExtensionCount, nullptr));
 
-    std::vector<const char*> extensions(extension_count);
-    SDL_CHECK(SDL_Vulkan_GetInstanceExtensions(window, &extension_count, extensions.data()));
+    std::vector<const char*> instExtensions(instExtensionCount);
+    SDL_CHECK(SDL_Vulkan_GetInstanceExtensions(window, &instExtensionCount, instExtensions.data()));
 
-    initInstance(extensions);
+    initInstance(instExtensions);
 
     // Create a Vulkan surface for rendering
     SDL_CHECK(SDL_Vulkan_CreateSurface(window, instance, &surface));
@@ -163,10 +163,14 @@ bool RenderEngine::isPhysicalDeviceValid(
     vkGetPhysicalDeviceQueueFamilyProperties2(device, &queueFamilyCount, queueFamilies.data());
 
     bool graphicsFamilyFound = false;
+    VkBool32 presentSupport = VK_FALSE; // use graphics queue to present
     for (uint32_t family = 0; family < queueFamilyCount; family++)
     {
+        vkGetPhysicalDeviceSurfaceSupportKHR(device, family, surface, &presentSupport);
+
         if (!graphicsFamilyFound &&
-            queueFamilies[family].queueFamilyProperties.queueFlags | VK_QUEUE_GRAPHICS_BIT)
+            queueFamilies[family].queueFamilyProperties.queueFlags | VK_QUEUE_GRAPHICS_BIT &&
+            presentSupport == VK_TRUE)
         {
             queueFamilyIndices.graphicsFamily = family;
             graphicsFamilyFound = true;
@@ -284,7 +288,7 @@ void RenderEngine::initSwapchain()
     swapchainInfo.imageArrayLayers = 1;
     swapchainInfo.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     swapchainInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    swapchainInfo.queueFamilyIndexCount = queueFamilyIndices.graphicsFamily;
+    swapchainInfo.queueFamilyIndexCount = 0;
     swapchainInfo.pQueueFamilyIndices = nullptr;
     swapchainInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR; // don't support screen rotation
     swapchainInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
