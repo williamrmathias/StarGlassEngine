@@ -24,7 +24,6 @@ class RenderEngine
 public:
     VkInstance instance;
     VkDebugUtilsMessengerEXT debugMessenger;
-    VkSurfaceKHR surface;
 
     VkPhysicalDevice physicalDevice;
     VkDevice device;
@@ -34,8 +33,10 @@ public:
         uint32_t graphicsFamily;
     };
     QueueFamilyIndices queueFamilyIndices;
-
     VkQueue graphicsQueue;
+
+    VkSurfaceKHR surface;
+    VkSwapchainKHR swapchain;
 
     void init(SDL_Window* window);
     void cleanup();
@@ -44,6 +45,7 @@ private:
     void initInstance(std::vector<const char*>& extensions);
     void initPhysicalDevice();
     void initDevice();
+    void initSwapchain();
 
     bool isPhysicalDeviceValid(VkPhysicalDevice device, VkPhysicalDeviceProperties2* deviceProperties);
 };
