@@ -67,12 +67,12 @@ void RenderEngine::cleanup()
     vkDestroyInstance(instance, nullptr);
 }
 
-void RenderEngine::initInstance(std::vector<const char*>& extensions)
+void RenderEngine::initInstance(std::vector<const char*>& instanceExtensions)
 {
     // Use validation layers if this is a debug build
     std::vector<const char*> layers;
 #if defined(_DEBUG)
-    extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    instanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     layers.push_back("VK_LAYER_KHRONOS_validation");
 #endif
 
@@ -120,8 +120,8 @@ void RenderEngine::initInstance(std::vector<const char*>& extensions)
 #endif
     instInfo.flags = 0;
     instInfo.pApplicationInfo = &appInfo;
-    instInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
-    instInfo.ppEnabledExtensionNames = extensions.data();
+    instInfo.enabledExtensionCount = static_cast<uint32_t>(instanceExtensions.size());
+    instInfo.ppEnabledExtensionNames = instanceExtensions.data();
     instInfo.enabledLayerCount = static_cast<uint32_t>(layers.size());
     instInfo.ppEnabledLayerNames = layers.data();
 
@@ -225,4 +225,6 @@ void RenderEngine::initDevice()
     deviceCreateInfo.pEnabledFeatures = nullptr; // TODO: add swapchain support    
 
     VK_CHECK(vkCreateDevice(physicalDevice, &deviceCreateInfo, nullptr, &device));
+
+    vkGetDeviceQueue(device, queueFamilyIndices.graphicsFamily, 0, &graphicsQueue);
 }
