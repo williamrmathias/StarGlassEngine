@@ -2,6 +2,7 @@
 
 // stl
 #include <array>
+#include <algorithm>
 #include <iostream>
 
 #define VK_CHECK(result)                                     \
@@ -49,10 +50,14 @@ void RenderEngine::init(SDL_Window* window)
 
     initPhysicalDevice();
     initDevice();
+
+    initSwapchain();
 }
 
 void RenderEngine::cleanup()
 {
+    vkDestroySwapchainKHR(device, swapchain, nullptr);
+
     vkDestroyDevice(device, nullptr);
 
     vkDestroySurfaceKHR(instance, surface, nullptr);
@@ -69,21 +74,21 @@ void RenderEngine::cleanup()
 
 void RenderEngine::initInstance(std::vector<const char*>& instanceExtensions)
 {
+    // check that instance supports Vulkan 1.3
+    uint32_t instanceAPI;
+    vkEnumerateInstanceVersion(&instanceAPI);
+    if (instanceAPI < VK_API_VERSION_1_3)
+    {
+        std::cout << "Detected Vulkan Error: Instance does not support Vulkan 1.3" << std::endl;
+        std::abort();
+    }
+
     // Use validation layers if this is a debug build
     std::vector<const char*> layers;
 #if defined(_DEBUG)
     instanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     layers.push_back("VK_LAYER_KHRONOS_validation");
 #endif
-
-    // check that instance supports Vulkan 1.4
-    uint32_t instanceAPI;
-    vkEnumerateInstanceVersion(&instanceAPI);
-    if (instanceAPI < VK_API_VERSION_1_3)
-    {
-        std::cout << "Detected Vulkan Error: Instance does not support Vulkan 1.4" << std::endl;
-        std::abort();
-    }
 
     // VkApplicationInfo allows the programmer to specifiy some basic information about the
     // program, which can be useful for layers and tools to provide more debug information.
@@ -204,6 +209,10 @@ void RenderEngine::initPhysicalDevice()
 
 void RenderEngine::initDevice()
 {
+    std::array<const char*, 1> deviceExtensions = {
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME
+    };
+
     float graphicsPriority = 1.f; // max priority
 
     VkDeviceQueueCreateInfo queueCreateInfo{};
@@ -220,11 +229,68 @@ void RenderEngine::initDevice()
     deviceCreateInfo.flags = 0;
     deviceCreateInfo.queueCreateInfoCount = 1; // graphics
     deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
-    deviceCreateInfo.enabledExtensionCount = 0;
-    deviceCreateInfo.ppEnabledExtensionNames = nullptr;
-    deviceCreateInfo.pEnabledFeatures = nullptr; // TODO: add swapchain support    
+    deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
+    deviceCreateInfo.ppEnabledExtensionNames = deviceExtensions.data();
+    deviceCreateInfo.pEnabledFeatures = nullptr; 
 
     VK_CHECK(vkCreateDevice(physicalDevice, &deviceCreateInfo, nullptr, &device));
-
     vkGetDeviceQueue(device, queueFamilyIndices.graphicsFamily, 0, &graphicsQueue);
+}
+
+void RenderEngine::initSwapchain()
+{
+    // check that double buffering is supported
+    VkSurfaceCapabilitiesKHR surfaceCaps;
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &surfaceCaps);
+    if (surfaceCaps.maxImageCount < 2)
+    {
+        std::cout << "Detected Vulkan Error: Surface doesn't support double buffering" << std::endl;
+        std::abort();
+    }
+
+    // check that FIFO present is supported
+    uint32_t presentModeCount;
+    vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, nullptr);
+
+    std::vector<VkPresentModeKHR> presentModes(presentModeCount);
+    vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, presentModes.data());
+    if (std::find(presentModes.begin(), presentModes.end(), VK_PRESENT_MODE_FIFO_KHR) == presentModes.end())
+    {
+        std::cout << "Detected Vulkan Error: Surface doesn't support FIFO present mode" << std::endl;
+        std::abort();
+    }
+
+    // query for surface format and colorspace
+    uint32_t formatCount;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, nullptr);
+    if (formatCount == 0)
+    {
+        std::cout << "Detected Vulkan Error: Surface doesn't support any image formats" << std::endl;
+        std::abort();
+    }
+
+    std::vector<VkSurfaceFormatKHR> formats(formatCount);
+    vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, formats.data());
+
+    VkSwapchainCreateInfoKHR swapchainInfo{};
+    swapchainInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+    swapchainInfo.pNext = nullptr;
+    swapchainInfo.flags = 0;
+    swapchainInfo.surface = surface;
+    swapchainInfo.minImageCount = std::min(uint32_t(3), surfaceCaps.maxImageCount); // use triple buffering if able
+    swapchainInfo.imageFormat = formats[0].format;
+    swapchainInfo.imageColorSpace = formats[0].colorSpace;
+    swapchainInfo.imageExtent = surfaceCaps.currentExtent;
+    swapchainInfo.imageArrayLayers = 1;
+    swapchainInfo.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    swapchainInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    swapchainInfo.queueFamilyIndexCount = queueFamilyIndices.graphicsFamily;
+    swapchainInfo.pQueueFamilyIndices = nullptr;
+    swapchainInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR; // don't support screen rotation
+    swapchainInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    swapchainInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    swapchainInfo.clipped = VK_TRUE;
+    swapchainInfo.oldSwapchain = VK_NULL_HANDLE;
+
+    VK_CHECK(vkCreateSwapchainKHR(device, &swapchainInfo, nullptr, &swapchain));
 }
