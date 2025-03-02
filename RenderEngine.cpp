@@ -69,15 +69,21 @@ void RenderEngine::cleanup()
 
 void RenderEngine::initInstance(std::vector<const char*>& extensions)
 {
-    uint32_t apiVersion;
-    VK_CHECK(vkEnumerateInstanceVersion(&apiVersion));
-
     // Use validation layers if this is a debug build
     std::vector<const char*> layers;
 #if defined(_DEBUG)
     extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     layers.push_back("VK_LAYER_KHRONOS_validation");
 #endif
+
+    // check that instance supports Vulkan 1.4
+    uint32_t instanceAPI;
+    vkEnumerateInstanceVersion(&instanceAPI);
+    if (instanceAPI < VK_API_VERSION_1_3)
+    {
+        std::cout << "Detected Vulkan Error: Instance does not support Vulkan 1.4" << std::endl;
+        std::abort();
+    }
 
     // VkApplicationInfo allows the programmer to specifiy some basic information about the
     // program, which can be useful for layers and tools to provide more debug information.
@@ -88,7 +94,7 @@ void RenderEngine::initInstance(std::vector<const char*>& extensions)
     appInfo.applicationVersion = 1;
     appInfo.pEngineName = "StarGlassEngine";
     appInfo.engineVersion = 1;
-    appInfo.apiVersion = apiVersion;
+    appInfo.apiVersion = VK_API_VERSION_1_3;
 
     // create debug messenger info
     VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
@@ -98,7 +104,8 @@ void RenderEngine::initInstance(std::vector<const char*>& extensions)
     debugCreateInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
         | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT;
     debugCreateInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
-        | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT
+        | VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT;
     debugCreateInfo.pfnUserCallback = debugCallback;
     debugCreateInfo.pUserData = nullptr;
 
@@ -142,10 +149,12 @@ bool RenderEngine::isPhysicalDeviceValid(
 {
     vkGetPhysicalDeviceProperties2(device, deviceProperties);
 
+    if (deviceProperties->properties.apiVersion < VK_API_VERSION_1_3) return false;
+
     uint32_t queueFamilyCount;
     vkGetPhysicalDeviceQueueFamilyProperties2(device, &queueFamilyCount, nullptr);
 
-    std::vector<VkQueueFamilyProperties2> queueFamilies(queueFamilyCount);
+    std::vector<VkQueueFamilyProperties2> queueFamilies(queueFamilyCount, {VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2});
     vkGetPhysicalDeviceQueueFamilyProperties2(device, &queueFamilyCount, queueFamilies.data());
 
     bool graphicsFamilyFound = false;
@@ -195,13 +204,15 @@ void RenderEngine::initPhysicalDevice()
 
 void RenderEngine::initDevice()
 {
+    float graphicsPriority = 1.f; // max priority
+
     VkDeviceQueueCreateInfo queueCreateInfo{};
     queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
     queueCreateInfo.pNext = nullptr;
     queueCreateInfo.flags = 0;
     queueCreateInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily;
     queueCreateInfo.queueCount = 1;
-    queueCreateInfo.pQueuePriorities = nullptr;
+    queueCreateInfo.pQueuePriorities = &graphicsPriority;
 
     VkDeviceCreateInfo deviceCreateInfo{};
     deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
