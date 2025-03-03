@@ -52,10 +52,17 @@ void RenderEngine::init(SDL_Window* window)
     initDevice();
 
     initSwapchain();
+
+    initCommandBuffers();
 }
 
 void RenderEngine::cleanup()
 {
+    for (FrameData& frame : frames)
+    {
+        vkDestroyCommandPool(device, frame.commandPool, nullptr);
+    }
+
     vkDestroySwapchainKHR(device, swapchain, nullptr); // also destroys swapchain images
 
     vkDestroyDevice(device, nullptr);
@@ -146,40 +153,6 @@ void RenderEngine::initInstance(std::vector<const char*>& instanceExtensions)
     // create debug messenger
     VK_CHECK(createDebugUtilsMessengerEXT(instance, &debugCreateInfo, nullptr, &debugMessenger));
 #endif
-}
-
-bool RenderEngine::isPhysicalDeviceValid(
-    VkPhysicalDevice device,
-    VkPhysicalDeviceProperties2* deviceProperties)
-{
-    vkGetPhysicalDeviceProperties2(device, deviceProperties);
-
-    if (deviceProperties->properties.apiVersion < VK_API_VERSION_1_3) return false;
-
-    uint32_t queueFamilyCount;
-    vkGetPhysicalDeviceQueueFamilyProperties2(device, &queueFamilyCount, nullptr);
-
-    std::vector<VkQueueFamilyProperties2> queueFamilies(queueFamilyCount, {VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2});
-    vkGetPhysicalDeviceQueueFamilyProperties2(device, &queueFamilyCount, queueFamilies.data());
-
-    bool graphicsFamilyFound = false;
-    VkBool32 presentSupport = VK_FALSE; // use graphics queue to present
-    for (uint32_t family = 0; family < queueFamilyCount; family++)
-    {
-        vkGetPhysicalDeviceSurfaceSupportKHR(device, family, surface, &presentSupport);
-
-        if (!graphicsFamilyFound &&
-            queueFamilies[family].queueFamilyProperties.queueFlags | VK_QUEUE_GRAPHICS_BIT &&
-            presentSupport == VK_TRUE)
-        {
-            queueFamilyIndices.graphicsFamily = family;
-            graphicsFamilyFound = true;
-        }
-
-        if (graphicsFamilyFound) break;
-    }
-
-    return graphicsFamilyFound && deviceProperties->properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
 }
 
 void RenderEngine::initPhysicalDevice()
@@ -307,4 +280,67 @@ void RenderEngine::initSwapchain()
 
     swapchainImages.resize(swapchainImageCount);
     vkGetSwapchainImagesKHR(device, swapchain, &swapchainImageCount, swapchainImages.data());
+}
+
+void RenderEngine::initCommandBuffers()
+{
+    // create command pools
+    VkCommandPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    poolInfo.pNext = nullptr;
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily;
+    for (size_t i = 0; i < NUM_FRAMES; i++)
+        VK_CHECK(vkCreateCommandPool(device, &poolInfo, nullptr, &frames[i].commandPool));
+
+    // create command buffers
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.pNext = nullptr;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = 1;
+    for (size_t i = 0; i < NUM_FRAMES; i++)
+    {
+        allocInfo.commandPool = frames[i].commandPool;
+        VK_CHECK(vkAllocateCommandBuffers(device, &allocInfo, &frames[i].commandBuffer));
+    }
+}
+
+bool RenderEngine::isPhysicalDeviceValid(
+    VkPhysicalDevice device,
+    VkPhysicalDeviceProperties2* deviceProperties)
+{
+    vkGetPhysicalDeviceProperties2(device, deviceProperties);
+
+    if (deviceProperties->properties.apiVersion < VK_API_VERSION_1_3) return false;
+
+    uint32_t queueFamilyCount;
+    vkGetPhysicalDeviceQueueFamilyProperties2(device, &queueFamilyCount, nullptr);
+
+    std::vector<VkQueueFamilyProperties2> queueFamilies(queueFamilyCount, { VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2 });
+    vkGetPhysicalDeviceQueueFamilyProperties2(device, &queueFamilyCount, queueFamilies.data());
+
+    bool graphicsFamilyFound = false;
+    VkBool32 presentSupport = VK_FALSE; // use graphics queue to present
+    for (uint32_t family = 0; family < queueFamilyCount; family++)
+    {
+        vkGetPhysicalDeviceSurfaceSupportKHR(device, family, surface, &presentSupport);
+
+        if (!graphicsFamilyFound &&
+            queueFamilies[family].queueFamilyProperties.queueFlags | VK_QUEUE_GRAPHICS_BIT &&
+            presentSupport == VK_TRUE)
+        {
+            queueFamilyIndices.graphicsFamily = family;
+            graphicsFamilyFound = true;
+        }
+
+        if (graphicsFamilyFound) break;
+    }
+
+    return graphicsFamilyFound && deviceProperties->properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+}
+
+RenderEngine::FrameData& RenderEngine::getCurrentFrameData()
+{
+    return frames[currentFrameNumber % NUM_FRAMES];
 }

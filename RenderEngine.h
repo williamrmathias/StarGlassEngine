@@ -18,6 +18,8 @@
 // stl
 #include <vector>
 
+const size_t NUM_FRAMES = 2;
+
 class RenderEngine
 {
 public:
@@ -41,6 +43,14 @@ public:
     VkFormat swapchainFormat;
     VkExtent2D swapchainExtent;
 
+    struct FrameData
+    {
+        VkCommandPool commandPool;
+        VkCommandBuffer commandBuffer;
+    };
+    FrameData frames[NUM_FRAMES];
+    size_t currentFrameNumber = 0;
+
     void init(SDL_Window* window);
     void cleanup();
 
@@ -49,7 +59,9 @@ private:
     void initPhysicalDevice();
     void initDevice();
     void initSwapchain();
+    void initCommandBuffers();
 
     bool isPhysicalDeviceValid(VkPhysicalDevice device, VkPhysicalDeviceProperties2* deviceProperties);
+    FrameData& getCurrentFrameData();
 };
 
