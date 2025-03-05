@@ -51,6 +51,8 @@ public:
     FrameData frames[NUM_FRAMES];
     size_t currentFrameNumber = 0;
 
+    VkPipeline graphicsPipeline;
+
     void init(SDL_Window* window);
     void cleanup();
 
@@ -60,6 +62,7 @@ private:
     void initDevice();
     void initSwapchain();
     void initCommandBuffers();
+    void initGraphicsPipeline();
 
     bool isPhysicalDeviceValid(VkPhysicalDevice device, VkPhysicalDeviceProperties2* deviceProperties);
     FrameData& getCurrentFrameData();

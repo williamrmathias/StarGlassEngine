@@ -54,6 +54,8 @@ void RenderEngine::init(SDL_Window* window)
     initSwapchain();
 
     initCommandBuffers();
+
+    initGraphicsPipeline();
 }
 
 void RenderEngine::cleanup()
@@ -304,6 +306,24 @@ void RenderEngine::initCommandBuffers()
         allocInfo.commandPool = frames[i].commandPool;
         VK_CHECK(vkAllocateCommandBuffers(device, &allocInfo, &frames[i].commandBuffer));
     }
+}
+
+void RenderEngine::initGraphicsPipeline()
+{
+    // create shader modules
+
+
+    // create shader stages
+    VkPipelineShaderStageCreateInfo shaderInfo{};
+
+    // create graphics pipeline
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.pNext = nullptr;
+    pipelineInfo.flags = 0;
+    pipelineInfo.stageCount = 2;
+
+    //vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, );
 }
 
 bool RenderEngine::isPhysicalDeviceValid(
