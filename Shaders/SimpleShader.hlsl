@@ -18,7 +18,7 @@ VertexOutput simpleVS(VertexInput input)
 	return output;
 }
 
-float4 simplePS(VertexOutput input)
+float4 simplePS(VertexOutput input) : SV_Target
 {
     return float4(input.color, 1.f);
 }

@@ -4,6 +4,7 @@
 #include <array>
 #include <algorithm>
 #include <iostream>
+#include <fstream>
 
 #define VK_CHECK(result)                                     \
     do {                                                     \
@@ -310,20 +311,39 @@ void RenderEngine::initCommandBuffers()
 
 void RenderEngine::initGraphicsPipeline()
 {
-    // create shader modules
-
+    VkShaderModule vertShader = loadShaderModule("Shaders/SimpleShader_simpleVS.spirv");
+    VkShaderModule fragShader = loadShaderModule("Shaders/SimpleShader_simplePS.spirv");
 
     // create shader stages
-    VkPipelineShaderStageCreateInfo shaderInfo{};
+    std::array<VkPipelineShaderStageCreateInfo, 2> stageInfos;
+    for (auto& stage : stageInfos)
+    {
+        stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stage.pNext = nullptr;
+        stage.flags = 0;
+        stage.pSpecializationInfo = nullptr;
+    }
+    stageInfos[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stageInfos[0].module = vertShader;
+    stageInfos[0].pName = "simpleVS";
+
+    stageInfos[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stageInfos[1].module = fragShader;
+    stageInfos[1].pName = "simplePS";
 
     // create graphics pipeline
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     pipelineInfo.pNext = nullptr;
     pipelineInfo.flags = 0;
-    pipelineInfo.stageCount = 2;
+    pipelineInfo.stageCount = static_cast<uint32_t>(stageInfos.size());
+    pipelineInfo.pStages = stageInfos.data();
 
     //vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, );
+
+    // Shader modules can be destroyed after the pipeline is created
+    vkDestroyShaderModule(device, vertShader, nullptr);
+    vkDestroyShaderModule(device, fragShader, nullptr);
 }
 
 bool RenderEngine::isPhysicalDeviceValid(
@@ -363,4 +383,42 @@ bool RenderEngine::isPhysicalDeviceValid(
 RenderEngine::FrameData& RenderEngine::getCurrentFrameData()
 {
     return frames[currentFrameNumber % NUM_FRAMES];
+}
+
+VkShaderModule RenderEngine::loadShaderModule(const char* shaderPath)
+{
+    VkShaderModuleCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    createInfo.pNext = nullptr;
+    createInfo.flags = 0;
+    
+    // load in file
+    // load as binary and place file cursor at the end to get the file size
+    std::ifstream shader(shaderPath, std::ios::binary | std::ios::ate);
+    if (!shader)
+    {
+        std::cout << "Shader load error: Could not open file: " << shaderPath << std::endl;
+        std::abort();
+    }
+
+    size_t codeSize = static_cast<size_t>(shader.tellg());
+    size_t codeSizeAdjusted = codeSize + (codeSize % 4); // ensure code size is a multiple of 4
+
+    // go back to the begining of the file to load it
+    shader.seekg(0, std::ios::beg);
+
+    std::vector<char> shaderCode(codeSizeAdjusted, '\0');
+    if (!shader.read(shaderCode.data(), codeSize))
+    {
+        std::cout << "Shader load error: Could not read file data: " << shaderPath << std::endl;
+        std::abort();
+    }
+
+    createInfo.codeSize = codeSizeAdjusted;
+    createInfo.pCode = reinterpret_cast<uint32_t*>(shaderCode.data());
+
+    VkShaderModule resultShader;
+    VK_CHECK(vkCreateShaderModule(device, &createInfo, nullptr, &resultShader));
+
+    return resultShader;
 }

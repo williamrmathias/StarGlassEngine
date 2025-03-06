@@ -109,11 +109,7 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
-    <PreBuildEvent>
-      <Command>dxc -T vs_6_0 -E simpleVS -spirv "$(ProjectDir)SimpleShader.hlsl" -Fo "$(OutDir)shaders\simpleVS.spv"
-dxc -T ps_6_0 -E simplePS -spirv "$(ProjectDir)SimpleShader.hlsl" -Fo "$(OutDir)shaders\simplePS.spv"
-</Command>
-    </PreBuildEvent>
+    <PreBuildEvent />
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -130,11 +126,7 @@ dxc -T ps_6_0 -E simplePS -spirv "$(ProjectDir)SimpleShader.hlsl" -Fo "$(OutDir)
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
-    <PreBuildEvent>
-      <Command>dxc -T vs_6_0 -E simpleVS -spirv "$(ProjectDir)SimpleShader.hlsl" -Fo "$(OutDir)shaders\simpleVS.spv"
-dxc -T ps_6_0 -E simplePS -spirv "$(ProjectDir)SimpleShader.hlsl" -Fo "$(OutDir)shaders\simplePS.spv"
-</Command>
-    </PreBuildEvent>
+    <PreBuildEvent />
   </ItemDefinitionGroup>
   <ItemGroup>
     <FxCompile Include="SimpleShader.hlsl">

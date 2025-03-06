@@ -66,5 +66,6 @@ private:
 
     bool isPhysicalDeviceValid(VkPhysicalDevice device, VkPhysicalDeviceProperties2* deviceProperties);
     FrameData& getCurrentFrameData();
+    VkShaderModule loadShaderModule(const char* shaderPath);
 };
 
