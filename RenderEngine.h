@@ -20,6 +20,15 @@
 
 const size_t NUM_FRAMES = 2;
 
+struct Vertex
+{
+    glm::vec2 position;
+    glm::vec3 color;
+
+    static VkVertexInputBindingDescription getInputBindingDescription();
+    static std::array<VkVertexInputAttributeDescription, 2> getInputAttributeDescription();
+};
+
 class RenderEngine
 {
 public:
@@ -51,6 +60,7 @@ public:
     FrameData frames[NUM_FRAMES];
     size_t currentFrameNumber = 0;
 
+    VkPipelineLayout graphicsPipelineLayout;
     VkPipeline graphicsPipeline;
 
     void init(SDL_Window* window);

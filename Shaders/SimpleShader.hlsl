@@ -10,6 +10,11 @@ struct VertexOutput
     [[vk::location(0)]] float3 color : COLOR0;
 };
 
+struct PixelOutput
+{
+    float4 color : SV_Target;
+};
+
 VertexOutput simpleVS(VertexInput input)
 {
     VertexOutput output;
@@ -18,7 +23,9 @@ VertexOutput simpleVS(VertexInput input)
 	return output;
 }
 
-float4 simplePS(VertexOutput input) : SV_Target
+PixelOutput simplePS(VertexOutput input)
 {
-    return float4(input.color, 1.f);
+    PixelOutput result;
+    result.color = float4(input.color, 1.f);
+    return result;
 }
