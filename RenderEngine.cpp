@@ -4,9 +4,9 @@
 #include <SDL2/SDL_Log.h>
 
 // stl
-#include <array>
 #include <algorithm>
 #include <iostream>
+#include <fstream>
 
 static inline void VKCheck(VkResult result)
 {
@@ -55,11 +55,23 @@ void RenderEngine::init(SDL_Window* window)
     initDevice();
 
     initSwapchain();
+
+    initCommandBuffers();
+
+    initGraphicsPipeline();
 }
 
 void RenderEngine::cleanup()
 {
-    vkDestroySwapchainKHR(device, swapchain, nullptr);
+    for (FrameData& frame : frames)
+    {
+        vkDestroyCommandPool(device, frame.commandPool, nullptr);
+    }
+
+    vkDestroyPipelineLayout(device, graphicsPipelineLayout, nullptr);
+    vkDestroyPipeline(device, graphicsPipeline, nullptr);
+
+    vkDestroySwapchainKHR(device, swapchain, nullptr); // also destroys swapchain images
 
     vkDestroyDevice(device, nullptr);
 
@@ -151,40 +163,6 @@ void RenderEngine::initInstance(std::vector<const char*>& instanceExtensions)
 #endif
 }
 
-bool RenderEngine::isPhysicalDeviceValid(
-    VkPhysicalDevice device,
-    VkPhysicalDeviceProperties2* deviceProperties)
-{
-    vkGetPhysicalDeviceProperties2(device, deviceProperties);
-
-    if (deviceProperties->properties.apiVersion < VK_API_VERSION_1_3) return false;
-
-    uint32_t queueFamilyCount;
-    vkGetPhysicalDeviceQueueFamilyProperties2(device, &queueFamilyCount, nullptr);
-
-    std::vector<VkQueueFamilyProperties2> queueFamilies(queueFamilyCount, {VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2});
-    vkGetPhysicalDeviceQueueFamilyProperties2(device, &queueFamilyCount, queueFamilies.data());
-
-    bool graphicsFamilyFound = false;
-    VkBool32 presentSupport = VK_FALSE; // use graphics queue to present
-    for (uint32_t family = 0; family < queueFamilyCount; family++)
-    {
-        vkGetPhysicalDeviceSurfaceSupportKHR(device, family, surface, &presentSupport);
-
-        if (!graphicsFamilyFound &&
-            queueFamilies[family].queueFamilyProperties.queueFlags | VK_QUEUE_GRAPHICS_BIT &&
-            presentSupport == VK_TRUE)
-        {
-            queueFamilyIndices.graphicsFamily = family;
-            graphicsFamilyFound = true;
-        }
-
-        if (graphicsFamilyFound) break;
-    }
-
-    return graphicsFamilyFound && deviceProperties->properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
-}
-
 void RenderEngine::initPhysicalDevice()
 {
     uint32_t physicalDeviceCount;
@@ -216,10 +194,6 @@ void RenderEngine::initPhysicalDevice()
 
 void RenderEngine::initDevice()
 {
-    std::array<const char*, 1> deviceExtensions = {
-        VK_KHR_SWAPCHAIN_EXTENSION_NAME
-    };
-
     float graphicsPriority = 1.f; // max priority
 
     VkDeviceQueueCreateInfo queueCreateInfo{};
@@ -230,17 +204,28 @@ void RenderEngine::initDevice()
     queueCreateInfo.queueCount = 1;
     queueCreateInfo.pQueuePriorities = &graphicsPriority;
 
+    // enable dynamic rendering
+    VkPhysicalDeviceDynamicRenderingFeatures dynamicRendering{};
+    dynamicRendering.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
+    dynamicRendering.pNext = nullptr;
+    dynamicRendering.dynamicRendering = VK_TRUE;
+
+    VkPhysicalDeviceFeatures2 features{};
+    features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    features.pNext = &dynamicRendering;
+    features.features = VkPhysicalDeviceFeatures{ VK_FALSE };
+
     VkDeviceCreateInfo deviceCreateInfo{};
     deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    deviceCreateInfo.pNext = nullptr;
+    deviceCreateInfo.pNext = &features;
     deviceCreateInfo.flags = 0;
     deviceCreateInfo.queueCreateInfoCount = 1; // graphics
     deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
     deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
     deviceCreateInfo.ppEnabledExtensionNames = deviceExtensions.data();
-    deviceCreateInfo.pEnabledFeatures = nullptr; 
+    deviceCreateInfo.pEnabledFeatures = nullptr;
 
-    VKCheck(vkCreateDevice(physicalDevice, &deviceCreateInfo, nullptr, &device));
+    VK_CHECK(vkCreateDevice(physicalDevice, &deviceCreateInfo, nullptr, &device));
 
     vkGetDeviceQueue(device, queueFamilyIndices.graphicsFamily, 0, &graphicsQueue);
 }
@@ -285,7 +270,7 @@ void RenderEngine::initSwapchain()
     swapchainInfo.pNext = nullptr;
     swapchainInfo.flags = 0;
     swapchainInfo.surface = surface;
-    swapchainInfo.minImageCount = std::min(uint32_t(3), surfaceCaps.maxImageCount); // use triple buffering if able
+    swapchainInfo.minImageCount = std::min(surfaceCaps.minImageCount + 1, surfaceCaps.maxImageCount);
     swapchainInfo.imageFormat = formats[0].format;
     swapchainInfo.imageColorSpace = formats[0].colorSpace;
     swapchainInfo.imageExtent = surfaceCaps.currentExtent;
@@ -300,7 +285,7 @@ void RenderEngine::initSwapchain()
     swapchainInfo.clipped = VK_TRUE;
     swapchainInfo.oldSwapchain = VK_NULL_HANDLE;
 
-    VKCheck(vkCreateSwapchainKHR(device, &swapchainInfo, nullptr, &swapchain));
+    VK_CHECK(vkCreateSwapchainKHR(device, &swapchainInfo, nullptr, &swapchain));
 
     // create swapchain image structs
     swapchainFormat = formats[0].format;
@@ -322,7 +307,7 @@ void RenderEngine::initCommandBuffers()
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily;
     for (size_t i = 0; i < NUM_FRAMES; i++)
-        VKCheck(vkCreateCommandPool(device, &poolInfo, nullptr, &frames[i].commandPool));
+        VK_CHECK(vkCreateCommandPool(device, &poolInfo, nullptr, &frames[i].commandPool));
 
     // create command buffers
     VkCommandBufferAllocateInfo allocInfo{};
@@ -333,7 +318,7 @@ void RenderEngine::initCommandBuffers()
     for (size_t i = 0; i < NUM_FRAMES; i++)
     {
         allocInfo.commandPool = frames[i].commandPool;
-        VKCheck(vkAllocateCommandBuffers(device, &allocInfo, &frames[i].commandBuffer));
+        VK_CHECK(vkAllocateCommandBuffers(device, &allocInfo, &frames[i].commandBuffer));
     }
 }
 
@@ -472,7 +457,7 @@ void RenderEngine::initGraphicsPipeline()
     layoutInfo.pushConstantRangeCount = 0;
     layoutInfo.pPushConstantRanges = nullptr;
 
-    VKCheck(vkCreatePipelineLayout(device, &layoutInfo, nullptr, &graphicsPipelineLayout));
+    VK_CHECK(vkCreatePipelineLayout(device, &layoutInfo, nullptr, &graphicsPipelineLayout));
 
     // create graphics pipeline
     VkGraphicsPipelineCreateInfo pipelineInfo{};
@@ -495,7 +480,7 @@ void RenderEngine::initGraphicsPipeline()
     pipelineInfo.basePipelineHandle = VK_NULL_HANDLE; // don't derive pipeline
     pipelineInfo.basePipelineIndex = 0;
 
-    VKCheck(vkCreateGraphicsPipelines(
+    VK_CHECK(vkCreateGraphicsPipelines(
         device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline));
 
     // Shader modules can be destroyed after the pipeline is created
@@ -596,7 +581,7 @@ VkShaderModule RenderEngine::loadShaderModule(const char* shaderPath)
     createInfo.pCode = reinterpret_cast<uint32_t*>(shaderCode.data());
 
     VkShaderModule resultShader;
-    VKCheck(vkCreateShaderModule(device, &createInfo, nullptr, &resultShader));
+    VK_CHECK(vkCreateShaderModule(device, &createInfo, nullptr, &resultShader));
 
     return resultShader;
 }
