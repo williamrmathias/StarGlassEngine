@@ -17,6 +17,12 @@
 
 // stl
 #include <vector>
+#include <array>
+
+static const std::array<const char*, 2> deviceExtensions = {
+    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+    VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME
+};
 
 const size_t NUM_FRAMES = 2;
 

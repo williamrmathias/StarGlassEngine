@@ -1,7 +1,6 @@
 #include "RenderEngine.h"
 
 // stl
-#include <array>
 #include <algorithm>
 #include <iostream>
 #include <fstream>
@@ -66,7 +65,8 @@ void RenderEngine::cleanup()
         vkDestroyCommandPool(device, frame.commandPool, nullptr);
     }
 
-    vkDestroyPipelineLayout(device,graphicsPipelineLayout, nullptr);
+    vkDestroyPipelineLayout(device, graphicsPipelineLayout, nullptr);
+    vkDestroyPipeline(device, graphicsPipeline, nullptr);
 
     vkDestroySwapchainKHR(device, swapchain, nullptr); // also destroys swapchain images
 
@@ -191,10 +191,6 @@ void RenderEngine::initPhysicalDevice()
 
 void RenderEngine::initDevice()
 {
-    std::array<const char*, 1> deviceExtensions = {
-        VK_KHR_SWAPCHAIN_EXTENSION_NAME
-    };
-
     float graphicsPriority = 1.f; // max priority
 
     VkDeviceQueueCreateInfo queueCreateInfo{};
@@ -205,17 +201,29 @@ void RenderEngine::initDevice()
     queueCreateInfo.queueCount = 1;
     queueCreateInfo.pQueuePriorities = &graphicsPriority;
 
+    // enable dynamic rendering
+    VkPhysicalDeviceDynamicRenderingFeatures dynamicRendering{};
+    dynamicRendering.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
+    dynamicRendering.pNext = nullptr;
+    dynamicRendering.dynamicRendering = VK_TRUE;
+
+    VkPhysicalDeviceFeatures2 features{};
+    features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    features.pNext = &dynamicRendering;
+    features.features = VkPhysicalDeviceFeatures{ VK_FALSE };
+
     VkDeviceCreateInfo deviceCreateInfo{};
     deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    deviceCreateInfo.pNext = nullptr;
+    deviceCreateInfo.pNext = &features;
     deviceCreateInfo.flags = 0;
     deviceCreateInfo.queueCreateInfoCount = 1; // graphics
     deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
     deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
     deviceCreateInfo.ppEnabledExtensionNames = deviceExtensions.data();
-    deviceCreateInfo.pEnabledFeatures = nullptr; 
+    deviceCreateInfo.pEnabledFeatures = nullptr;
 
     VK_CHECK(vkCreateDevice(physicalDevice, &deviceCreateInfo, nullptr, &device));
+
     vkGetDeviceQueue(device, queueFamilyIndices.graphicsFamily, 0, &graphicsQueue);
 }
 
@@ -354,6 +362,17 @@ void RenderEngine::initGraphicsPipeline()
     iaInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     iaInfo.primitiveRestartEnable = VK_FALSE;
 
+    // create viewport state
+    // Note: We're using dynamic viewport and scissor state
+    VkPipelineViewportStateCreateInfo viewportInfo{};
+    viewportInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportInfo.pNext = nullptr;
+    viewportInfo.flags = 0;
+    viewportInfo.viewportCount = 1;
+    viewportInfo.pViewports = nullptr;
+    viewportInfo.scissorCount = 1;
+    viewportInfo.pScissors = nullptr;
+
     // create rasterization state
     VkPipelineRasterizationStateCreateInfo rasterInfo{};
     rasterInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
@@ -447,7 +466,7 @@ void RenderEngine::initGraphicsPipeline()
     pipelineInfo.pVertexInputState = &vertexInfo;
     pipelineInfo.pInputAssemblyState = &iaInfo;
     pipelineInfo.pTessellationState = nullptr;
-    pipelineInfo.pViewportState = nullptr; // use dynamic viewport
+    pipelineInfo.pViewportState = &viewportInfo;
     pipelineInfo.pRasterizationState = &rasterInfo;
     pipelineInfo.pMultisampleState = &multiInfo;
     pipelineInfo.pDepthStencilState = &dsInfo;
@@ -474,6 +493,27 @@ bool RenderEngine::isPhysicalDeviceValid(
 
     if (deviceProperties->properties.apiVersion < VK_API_VERSION_1_3) return false;
 
+    // query device extensions
+    uint32_t extensionCount = 0;
+    vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, nullptr);
+    std::vector<VkExtensionProperties> extensions(extensionCount);
+    vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, extensions.data());
+
+    for (const char* extensionName : deviceExtensions)
+    {
+        bool extensionFound = false;
+        for (uint32_t i = 0; i < extensionCount; i++)
+        {
+            if (strcmp(extensionName, extensions[i].extensionName) == 0)
+            {
+                extensionFound = true;
+                break;
+            }
+        }
+
+        if (!extensionFound) { return false; }
+    }
+
     uint32_t queueFamilyCount;
     vkGetPhysicalDeviceQueueFamilyProperties2(device, &queueFamilyCount, nullptr);
 
@@ -497,7 +537,7 @@ bool RenderEngine::isPhysicalDeviceValid(
         if (graphicsFamilyFound) break;
     }
 
-    return graphicsFamilyFound && deviceProperties->properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+    return graphicsFamilyFound;
 }
 
 RenderEngine::FrameData& RenderEngine::getCurrentFrameData()
