@@ -15,6 +15,13 @@
 
 int main()
 {
+#if defined(_DEBUG)
+    AllocConsole();
+    FILE* stdOut = freopen("CONOUT$", "w", stdout);
+    FILE* stdErr = freopen("CONOUT$", "w", stderr);
+#endif // DEBUG
+
+
     // Create an SDL window that supports Vulkan rendering.
     if (SDL_Init(SDL_INIT_VIDEO) != 0)
     {
@@ -63,6 +70,10 @@ int main()
 
     SDL_DestroyWindow(window);
     SDL_Quit();
+
+#if defined(_DEBUG)
+    system("pause");
+#endif
 
     return 0;
 }

@@ -1,30 +1,27 @@
 #include "RenderEngine.h"
 
-// sdl
-#include <SDL2/SDL_Log.h>
-
 // stl
 #include <algorithm>
 #include <iostream>
 #include <fstream>
 
-static inline void VKCheck(VkResult result)
-{
-    if (result != VK_SUCCESS)
-    {
-        SDL_LogError(0, "Detected Vulkan Error: %s\n", string_VkResult(result));
-        std::abort();
-    }
-}
+#define VK_CHECK(result)                                     \
+    do {                                                     \
+        if ((result) != VK_SUCCESS) {                        \
+            std::cout << "Detected Vulkan Error: "           \
+                      << string_VkResult(result) << std::endl; \
+            std::abort();                                    \
+        }                                                    \
+    } while (0)
 
-static inline void SDLCheck(SDL_bool result)
-{
-    if (!result)
-    {
-        SDL_LogError(0, "Dectected SDL Error\n");
-        std::abort();
-    }
-}
+
+#define SDL_CHECK(result)             \
+    do {                              \
+        if (!(result)) {              \
+            std::cout << "Detected SDL Error" << std::endl; \
+            std::abort();             \
+        }                             \
+    } while (0)
 
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
@@ -33,7 +30,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     const VkDebugUtilsMessengerCallbackDataEXT * pCallbackData,
     void* pUserData)
 {
-    SDL_LogError(0, "Vulkan Validation Layer: %s\n", pCallbackData->pMessage);
+    std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
     return VK_FALSE;
 }
 
@@ -41,15 +38,15 @@ void RenderEngine::init(SDL_Window* window)
 {
     // Get WSI extensions from SDL (we can add more if we like - we just can't remove these)
     unsigned instExtensionCount;
-    SDLCheck(SDL_Vulkan_GetInstanceExtensions(window, &instExtensionCount, nullptr));
+    SDL_CHECK(SDL_Vulkan_GetInstanceExtensions(window, &instExtensionCount, nullptr));
 
     std::vector<const char*> instExtensions(instExtensionCount);
-    SDLCheck(SDL_Vulkan_GetInstanceExtensions(window, &instExtensionCount, instExtensions.data()));
+    SDL_CHECK(SDL_Vulkan_GetInstanceExtensions(window, &instExtensionCount, instExtensions.data()));
 
     initInstance(instExtensions);
 
     // Create a Vulkan surface for rendering
-    SDLCheck(SDL_Vulkan_CreateSurface(window, instance, &surface));
+    SDL_CHECK(SDL_Vulkan_CreateSurface(window, instance, &surface));
 
     initPhysicalDevice();
     initDevice();
@@ -146,7 +143,7 @@ void RenderEngine::initInstance(std::vector<const char*>& instanceExtensions)
     instInfo.ppEnabledLayerNames = layers.data();
 
     // Create the Vulkan instance.
-    VKCheck(vkCreateInstance(&instInfo, nullptr, &instance));
+    VK_CHECK(vkCreateInstance(&instInfo, nullptr, &instance));
 
 #if defined(_DEBUG)
     auto createDebugUtilsMessengerEXT = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(
@@ -159,17 +156,17 @@ void RenderEngine::initInstance(std::vector<const char*>& instanceExtensions)
     }
 
     // create debug messenger
-    VKCheck(createDebugUtilsMessengerEXT(instance, &debugCreateInfo, nullptr, &debugMessenger));
+    VK_CHECK(createDebugUtilsMessengerEXT(instance, &debugCreateInfo, nullptr, &debugMessenger));
 #endif
 }
 
 void RenderEngine::initPhysicalDevice()
 {
     uint32_t physicalDeviceCount;
-    VKCheck(vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, nullptr));
+    VK_CHECK(vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, nullptr));
 
     std::vector<VkPhysicalDevice> physicalDevices(physicalDeviceCount);
-    VKCheck(vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, physicalDevices.data()));
+    VK_CHECK(vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, physicalDevices.data()));
 
     VkPhysicalDeviceProperties2 deviceProperties{};
     deviceProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
