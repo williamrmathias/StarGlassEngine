@@ -81,6 +81,8 @@ void RenderEngine::cleanup()
 
     vkDestroySwapchainKHR(device, swapchain, nullptr); // also destroys swapchain images
 
+    vmaDestroyBuffer(allocator, vertexBuffer, vertexBufferAlloc);
+
     vmaDestroyAllocator(allocator);
 
     vkDestroyDevice(device, nullptr);
@@ -357,21 +359,34 @@ void RenderEngine::initVertexBuffers()
     vertexData[1] = Vertex{ glm::vec2(0.f, 1.f), glm::vec3(0.f, 1.f, 0.f) };
     vertexData[2] = Vertex{ glm::vec2(0.f, -1.f), glm::vec3(0.f, 0.f, 1.f) };
 
-    // make vk buffer handle
+    size_t vertexDataSize = sizeof(Vertex) * vertexData.size();
+
     VkBufferCreateInfo bufferInfo{};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufferInfo.pNext = nullptr;
     bufferInfo.flags = 0;
-    bufferInfo.size = static_cast<VkDeviceSize>(sizeof(Vertex) * vertexData.size());
+    bufferInfo.size = static_cast<VkDeviceSize>(vertexDataSize);
     bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // exclusive to graphics queue
     bufferInfo.queueFamilyIndexCount = 0;
     bufferInfo.pQueueFamilyIndices = nullptr;
 
-    vkCreateBuffer(device, &bufferInfo, nullptr, &vertexBuffer);
+    VmaAllocationCreateInfo allocInfo{};
+    allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT 
+        | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+    allocInfo.requiredFlags = 0;
+    allocInfo.preferredFlags = 0;
+    allocInfo.memoryTypeBits = 0;
+    allocInfo.pool = VMA_NULL;
+    allocInfo.pUserData = nullptr;
+    allocInfo.priority = 0.f;
 
-    // get memory allocation
+    VK_Check(vmaCreateBuffer(
+        allocator, &bufferInfo, &allocInfo, &vertexBuffer, &vertexBufferAlloc, nullptr));
 
+    void* data = vertexBufferAlloc->GetMappedData();
+    memcpy(data, vertexData.data(), vertexDataSize);
 }
 
 void RenderEngine::initGraphicsPipeline()
