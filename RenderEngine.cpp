@@ -359,21 +359,21 @@ void RenderEngine::initVertexBuffers()
     vertexData[1] = Vertex{ glm::vec2(0.f, 1.f), glm::vec3(0.f, 1.f, 0.f) };
     vertexData[2] = Vertex{ glm::vec2(0.f, -1.f), glm::vec3(0.f, 0.f, 1.f) };
 
-    size_t vertexDataSize = sizeof(Vertex) * vertexData.size();
+    VkDeviceSize vertexDataSize = 
+        static_cast<VkDeviceSize>(sizeof(vertexData[0]) * vertexData.size());
 
     VkBufferCreateInfo bufferInfo{};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufferInfo.pNext = nullptr;
     bufferInfo.flags = 0;
-    bufferInfo.size = static_cast<VkDeviceSize>(vertexDataSize);
+    bufferInfo.size = vertexDataSize;
     bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // exclusive to graphics queue
     bufferInfo.queueFamilyIndexCount = 0;
     bufferInfo.pQueueFamilyIndices = nullptr;
 
     VmaAllocationCreateInfo allocInfo{};
-    allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT 
-        | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+    allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
     allocInfo.requiredFlags = 0;
     allocInfo.preferredFlags = 0;
@@ -385,8 +385,8 @@ void RenderEngine::initVertexBuffers()
     VK_Check(vmaCreateBuffer(
         allocator, &bufferInfo, &allocInfo, &vertexBuffer, &vertexBufferAlloc, nullptr));
 
-    void* data = vertexBufferAlloc->GetMappedData();
-    memcpy(data, vertexData.data(), vertexDataSize);
+    vmaCopyAllocationToMemory(allocator, vertexBufferAlloc, 0, vertexData.data(), vertexDataSize);
+    vmaFlushAllocation(allocator, vertexBufferAlloc, 0, vertexDataSize);
 }
 
 void RenderEngine::initGraphicsPipeline()
