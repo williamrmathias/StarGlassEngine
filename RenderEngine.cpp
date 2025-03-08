@@ -3,6 +3,10 @@
 // sdl
 #include <SDL2/SDL_log.h>
 
+// vma
+#define VMA_IMPLEMENTATION
+#include <vma/vk_mem_alloc.h>
+
 // stl
 #include <algorithm>
 #include <iostream>
@@ -54,9 +58,13 @@ void RenderEngine::init(SDL_Window* window)
     initPhysicalDevice();
     initDevice();
 
+    initVmaAllocator();
+
     initSwapchain();
 
     initCommandBuffers();
+
+    initVertexBuffers();
 
     initGraphicsPipeline();
 }
@@ -72,6 +80,8 @@ void RenderEngine::cleanup()
     vkDestroyPipeline(device, graphicsPipeline, nullptr);
 
     vkDestroySwapchainKHR(device, swapchain, nullptr); // also destroys swapchain images
+
+    vmaDestroyAllocator(allocator);
 
     vkDestroyDevice(device, nullptr);
 
@@ -92,7 +102,7 @@ void RenderEngine::initInstance(std::vector<const char*>& instanceExtensions)
     // check that instance supports Vulkan 1.3
     uint32_t instanceAPI;
     vkEnumerateInstanceVersion(&instanceAPI);
-    if (instanceAPI < VK_API_VERSION_1_3)
+    if (instanceAPI < vkApiVersion)
     {
         std::cout << "Detected Vulkan Error: Instance does not support Vulkan 1.3" << std::endl;
         std::abort();
@@ -114,7 +124,7 @@ void RenderEngine::initInstance(std::vector<const char*>& instanceExtensions)
     appInfo.applicationVersion = 1;
     appInfo.pEngineName = "StarGlassEngine";
     appInfo.engineVersion = 1;
-    appInfo.apiVersion = VK_API_VERSION_1_3;
+    appInfo.apiVersion = vkApiVersion;
 
     // create debug messenger info
     VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
@@ -230,6 +240,24 @@ void RenderEngine::initDevice()
     vkGetDeviceQueue(device, queueFamilyIndices.graphicsFamily, 0, &graphicsQueue);
 }
 
+void RenderEngine::initVmaAllocator()
+{
+    VmaAllocatorCreateInfo allocInfo{};
+    allocInfo.flags = 0;
+    allocInfo.physicalDevice = physicalDevice;
+    allocInfo.device = device;
+    allocInfo.preferredLargeHeapBlockSize = 0; // use default heap size
+    allocInfo.pAllocationCallbacks = nullptr;
+    allocInfo.pDeviceMemoryCallbacks = nullptr;
+    allocInfo.pHeapSizeLimit = nullptr;
+    allocInfo.pVulkanFunctions = nullptr;
+    allocInfo.instance = instance;
+    allocInfo.vulkanApiVersion = vkApiVersion;
+    allocInfo.pTypeExternalMemoryHandleTypes = nullptr;
+
+    VK_Check(vmaCreateAllocator(&allocInfo, &allocator));
+}
+
 void RenderEngine::initSwapchain()
 {
     // check that double buffering is supported
@@ -320,6 +348,30 @@ void RenderEngine::initCommandBuffers()
         allocInfo.commandPool = frames[i].commandPool;
         VK_Check(vkAllocateCommandBuffers(device, &allocInfo, &frames[i].commandBuffer));
     }
+}
+
+void RenderEngine::initVertexBuffers()
+{
+    std::array<Vertex, 3> vertexData;
+    vertexData[0] = Vertex{ glm::vec2(0.f, 0.f), glm::vec3(1.f, 0.f, 0.f) };
+    vertexData[1] = Vertex{ glm::vec2(0.f, 1.f), glm::vec3(0.f, 1.f, 0.f) };
+    vertexData[2] = Vertex{ glm::vec2(0.f, -1.f), glm::vec3(0.f, 0.f, 1.f) };
+
+    // make vk buffer handle
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.pNext = nullptr;
+    bufferInfo.flags = 0;
+    bufferInfo.size = static_cast<VkDeviceSize>(sizeof(Vertex) * vertexData.size());
+    bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // exclusive to graphics queue
+    bufferInfo.queueFamilyIndexCount = 0;
+    bufferInfo.pQueueFamilyIndices = nullptr;
+
+    vkCreateBuffer(device, &bufferInfo, nullptr, &vertexBuffer);
+
+    // get memory allocation
+
 }
 
 void RenderEngine::initGraphicsPipeline()
@@ -494,7 +546,7 @@ bool RenderEngine::isPhysicalDeviceValid(
 {
     vkGetPhysicalDeviceProperties2(device, deviceProperties);
 
-    if (deviceProperties->properties.apiVersion < VK_API_VERSION_1_3) return false;
+    if (deviceProperties->properties.apiVersion < vkApiVersion) return false;
 
     // query device extensions
     uint32_t extensionCount = 0;

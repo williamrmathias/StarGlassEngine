@@ -11,6 +11,9 @@
 #include <SDL2/SDL_syswm.h>
 #include <SDL2/SDL_vulkan.h>
 
+// VMA
+#include <vma/vk_mem_alloc.h>
+
 // Vulkan
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_enum_string_helper.h>
@@ -23,6 +26,8 @@ static const std::array<const char*, 2> deviceExtensions = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME,
     VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME
 };
+
+static const uint32_t vkApiVersion = VK_API_VERSION_1_3;
 
 const size_t NUM_FRAMES = 2;
 
@@ -43,6 +48,8 @@ public:
 
     VkPhysicalDevice physicalDevice;
     VkDevice device;
+
+    VmaAllocator allocator;
 
     struct QueueFamilyIndices
     {
@@ -66,6 +73,9 @@ public:
     FrameData frames[NUM_FRAMES];
     size_t currentFrameNumber = 0;
 
+    VkBuffer vertexBuffer;
+    VmaAllocation vertexBufferAlloc;
+
     VkPipelineLayout graphicsPipelineLayout;
     VkPipeline graphicsPipeline;
 
@@ -76,8 +86,10 @@ private:
     void initInstance(std::vector<const char*>& extensions);
     void initPhysicalDevice();
     void initDevice();
+    void initVmaAllocator();
     void initSwapchain();
     void initCommandBuffers();
+    void initVertexBuffers();
     void initGraphicsPipeline();
 
     bool isPhysicalDeviceValid(VkPhysicalDevice device, VkPhysicalDeviceProperties2* deviceProperties);
