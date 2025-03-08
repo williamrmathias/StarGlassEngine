@@ -1,27 +1,30 @@
 #include "RenderEngine.h"
 
+// sdl
+#include <SDL2/SDL_Log.h>
+
 // stl
 #include <array>
 #include <algorithm>
 #include <iostream>
 
-#define VK_CHECK(result)                                     \
-    do {                                                     \
-        if ((result) != VK_SUCCESS) {                        \
-            std::cout << "Detected Vulkan Error: "           \
-                      << string_VkResult(result) << std::endl; \
-            std::abort();                                    \
-        }                                                    \
-    } while (0)
+static inline void VKCheck(VkResult result)
+{
+    if (result != VK_SUCCESS)
+    {
+        SDL_LogError(0, "Detected Vulkan Error: %s\n", string_VkResult(result));
+        std::abort();
+    }
+}
 
-
-#define SDL_CHECK(result)             \
-    do {                              \
-        if (!(result)) {              \
-            std::cout << "Detected SDL Error" << std::endl; \
-            std::abort();             \
-        }                             \
-    } while (0)
+static inline void SDLCheck(SDL_bool result)
+{
+    if (!result)
+    {
+        SDL_LogError(0, "Dectected SDL Error\n");
+        std::abort();
+    }
+}
 
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
@@ -30,7 +33,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     const VkDebugUtilsMessengerCallbackDataEXT * pCallbackData,
     void* pUserData)
 {
-    std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
+    SDL_LogError(0, "Vulkan Validation Layer: %s\n", pCallbackData->pMessage);
     return VK_FALSE;
 }
 
@@ -38,15 +41,15 @@ void RenderEngine::init(SDL_Window* window)
 {
     // Get WSI extensions from SDL (we can add more if we like - we just can't remove these)
     unsigned instExtensionCount;
-    SDL_CHECK(SDL_Vulkan_GetInstanceExtensions(window, &instExtensionCount, nullptr));
+    SDLCheck(SDL_Vulkan_GetInstanceExtensions(window, &instExtensionCount, nullptr));
 
     std::vector<const char*> instExtensions(instExtensionCount);
-    SDL_CHECK(SDL_Vulkan_GetInstanceExtensions(window, &instExtensionCount, instExtensions.data()));
+    SDLCheck(SDL_Vulkan_GetInstanceExtensions(window, &instExtensionCount, instExtensions.data()));
 
     initInstance(instExtensions);
 
     // Create a Vulkan surface for rendering
-    SDL_CHECK(SDL_Vulkan_CreateSurface(window, instance, &surface));
+    SDLCheck(SDL_Vulkan_CreateSurface(window, instance, &surface));
 
     initPhysicalDevice();
     initDevice();
@@ -131,7 +134,7 @@ void RenderEngine::initInstance(std::vector<const char*>& instanceExtensions)
     instInfo.ppEnabledLayerNames = layers.data();
 
     // Create the Vulkan instance.
-    VK_CHECK(vkCreateInstance(&instInfo, nullptr, &instance));
+    VKCheck(vkCreateInstance(&instInfo, nullptr, &instance));
 
 #if defined(_DEBUG)
     auto createDebugUtilsMessengerEXT = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(
@@ -144,7 +147,7 @@ void RenderEngine::initInstance(std::vector<const char*>& instanceExtensions)
     }
 
     // create debug messenger
-    VK_CHECK(createDebugUtilsMessengerEXT(instance, &debugCreateInfo, nullptr, &debugMessenger));
+    VKCheck(createDebugUtilsMessengerEXT(instance, &debugCreateInfo, nullptr, &debugMessenger));
 #endif
 }
 
@@ -185,10 +188,10 @@ bool RenderEngine::isPhysicalDeviceValid(
 void RenderEngine::initPhysicalDevice()
 {
     uint32_t physicalDeviceCount;
-    VK_CHECK(vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, nullptr));
+    VKCheck(vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, nullptr));
 
     std::vector<VkPhysicalDevice> physicalDevices(physicalDeviceCount);
-    VK_CHECK(vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, physicalDevices.data()));
+    VKCheck(vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, physicalDevices.data()));
 
     VkPhysicalDeviceProperties2 deviceProperties{};
     deviceProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
@@ -237,7 +240,8 @@ void RenderEngine::initDevice()
     deviceCreateInfo.ppEnabledExtensionNames = deviceExtensions.data();
     deviceCreateInfo.pEnabledFeatures = nullptr; 
 
-    VK_CHECK(vkCreateDevice(physicalDevice, &deviceCreateInfo, nullptr, &device));
+    VKCheck(vkCreateDevice(physicalDevice, &deviceCreateInfo, nullptr, &device));
+
     vkGetDeviceQueue(device, queueFamilyIndices.graphicsFamily, 0, &graphicsQueue);
 }
 
@@ -296,5 +300,332 @@ void RenderEngine::initSwapchain()
     swapchainInfo.clipped = VK_TRUE;
     swapchainInfo.oldSwapchain = VK_NULL_HANDLE;
 
-    VK_CHECK(vkCreateSwapchainKHR(device, &swapchainInfo, nullptr, &swapchain));
+    VKCheck(vkCreateSwapchainKHR(device, &swapchainInfo, nullptr, &swapchain));
+
+    // create swapchain image structs
+    swapchainFormat = formats[0].format;
+    swapchainExtent = surfaceCaps.currentExtent;
+
+    uint32_t swapchainImageCount;
+    vkGetSwapchainImagesKHR(device, swapchain, &swapchainImageCount, nullptr);
+
+    swapchainImages.resize(swapchainImageCount);
+    vkGetSwapchainImagesKHR(device, swapchain, &swapchainImageCount, swapchainImages.data());
+}
+
+void RenderEngine::initCommandBuffers()
+{
+    // create command pools
+    VkCommandPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    poolInfo.pNext = nullptr;
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily;
+    for (size_t i = 0; i < NUM_FRAMES; i++)
+        VKCheck(vkCreateCommandPool(device, &poolInfo, nullptr, &frames[i].commandPool));
+
+    // create command buffers
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.pNext = nullptr;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = 1;
+    for (size_t i = 0; i < NUM_FRAMES; i++)
+    {
+        allocInfo.commandPool = frames[i].commandPool;
+        VKCheck(vkAllocateCommandBuffers(device, &allocInfo, &frames[i].commandBuffer));
+    }
+}
+
+void RenderEngine::initGraphicsPipeline()
+{
+    VkShaderModule vertShader = loadShaderModule("Shaders/SimpleShader_simpleVS.spirv");
+    VkShaderModule fragShader = loadShaderModule("Shaders/SimpleShader_simplePS.spirv");
+
+    // create shader stages
+    std::array<VkPipelineShaderStageCreateInfo, 2> stageInfos;
+    for (auto& stage : stageInfos)
+    {
+        stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stage.pNext = nullptr;
+        stage.flags = 0;
+        stage.pSpecializationInfo = nullptr;
+    }
+    stageInfos[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stageInfos[0].module = vertShader;
+    stageInfos[0].pName = "simpleVS";
+
+    stageInfos[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stageInfos[1].module = fragShader;
+    stageInfos[1].pName = "simplePS";
+
+    // create vertex input
+    VkVertexInputBindingDescription vertexBindingDesc = Vertex::getInputBindingDescription();
+    std::array<VkVertexInputAttributeDescription, 2> vertexAttribDesc = Vertex::getInputAttributeDescription();
+
+    VkPipelineVertexInputStateCreateInfo vertexInfo{};
+    vertexInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInfo.pNext = nullptr;
+    vertexInfo.flags = 0;
+    vertexInfo.vertexBindingDescriptionCount = 1;
+    vertexInfo.pVertexBindingDescriptions = &vertexBindingDesc;
+    vertexInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexAttribDesc.size());
+    vertexInfo.pVertexAttributeDescriptions = vertexAttribDesc.data();
+
+    // create input assembly
+    VkPipelineInputAssemblyStateCreateInfo iaInfo{};
+    iaInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    iaInfo.pNext = nullptr;
+    iaInfo.flags = 0;
+    iaInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    iaInfo.primitiveRestartEnable = VK_FALSE;
+
+    // create viewport state
+    // Note: We're using dynamic viewport and scissor state
+    VkPipelineViewportStateCreateInfo viewportInfo{};
+    viewportInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportInfo.pNext = nullptr;
+    viewportInfo.flags = 0;
+    viewportInfo.viewportCount = 1;
+    viewportInfo.pViewports = nullptr;
+    viewportInfo.scissorCount = 1;
+    viewportInfo.pScissors = nullptr;
+
+    // create rasterization state
+    VkPipelineRasterizationStateCreateInfo rasterInfo{};
+    rasterInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterInfo.pNext = nullptr;
+    rasterInfo.flags = 0;
+    rasterInfo.depthClampEnable = VK_FALSE; // disable depth test
+    rasterInfo.rasterizerDiscardEnable = VK_FALSE;
+    rasterInfo.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterInfo.cullMode = VK_CULL_MODE_NONE; // disable backface culling
+    rasterInfo.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterInfo.depthBiasEnable = VK_FALSE; // disable depth bias
+    rasterInfo.depthBiasConstantFactor = 0.f;
+    rasterInfo.depthBiasClamp = 0.f;
+    rasterInfo.depthBiasSlopeFactor = 0.f;
+    rasterInfo.lineWidth = 1.f;
+
+    // create multisample state
+    // only use 1 sample
+    VkPipelineMultisampleStateCreateInfo multiInfo{};
+    multiInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multiInfo.pNext = nullptr;
+    multiInfo.flags = 0;
+    multiInfo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multiInfo.sampleShadingEnable = VK_FALSE;
+    multiInfo.minSampleShading = 0.f;
+    multiInfo.pSampleMask = nullptr; // disable sample mask test
+    multiInfo.alphaToCoverageEnable = VK_FALSE;
+    multiInfo.alphaToOneEnable = VK_FALSE;
+
+    // create depth stencil state
+    VkPipelineDepthStencilStateCreateInfo dsInfo{};
+    dsInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    dsInfo.pNext = nullptr;
+    dsInfo.flags = 0;
+    dsInfo.depthTestEnable = VK_FALSE; // disable depth test
+    dsInfo.depthWriteEnable = VK_FALSE; // disable depth buffer writes
+    dsInfo.depthCompareOp = VK_COMPARE_OP_NEVER;
+    dsInfo.depthBoundsTestEnable = VK_FALSE; // disable depth bounds test
+    dsInfo.stencilTestEnable = VK_FALSE; // disable stencil test
+    dsInfo.front = VkStencilOpState{};
+    dsInfo.back = VkStencilOpState{};
+    dsInfo.minDepthBounds = 0.f;
+    dsInfo.maxDepthBounds = 1.f;
+
+    // create color blend state
+    VkPipelineColorBlendStateCreateInfo blendInfo{};
+    blendInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blendInfo.pNext = nullptr;
+    blendInfo.flags = 0;
+    blendInfo.logicOpEnable = VK_FALSE;
+    blendInfo.logicOp = VK_LOGIC_OP_CLEAR; // ignored
+    blendInfo.attachmentCount = 0;
+    blendInfo.pAttachments = nullptr;
+    blendInfo.blendConstants[0] = 0.f;
+    blendInfo.blendConstants[1] = 0.f;
+    blendInfo.blendConstants[2] = 0.f;
+    blendInfo.blendConstants[3] = 0.f;
+
+    // specify dynamic state (viewport and scissor)
+    std::array<VkDynamicState, 2> dynamicStates{
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR
+    };
+
+    VkPipelineDynamicStateCreateInfo dynamicInfo{};
+    dynamicInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicInfo.pNext = nullptr;
+    dynamicInfo.flags = 0;
+    dynamicInfo.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+    dynamicInfo.pDynamicStates = dynamicStates.data();
+
+    // make basic pipeline layout with no descriptors
+    VkPipelineLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.pNext = nullptr;
+    layoutInfo.flags = 0;
+    layoutInfo.setLayoutCount = 0;
+    layoutInfo.pSetLayouts = nullptr;
+    layoutInfo.pushConstantRangeCount = 0;
+    layoutInfo.pPushConstantRanges = nullptr;
+
+    VKCheck(vkCreatePipelineLayout(device, &layoutInfo, nullptr, &graphicsPipelineLayout));
+
+    // create graphics pipeline
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.pNext = nullptr;
+    pipelineInfo.flags = 0;
+    pipelineInfo.stageCount = static_cast<uint32_t>(stageInfos.size());
+    pipelineInfo.pStages = stageInfos.data();
+    pipelineInfo.pVertexInputState = &vertexInfo;
+    pipelineInfo.pInputAssemblyState = &iaInfo;
+    pipelineInfo.pTessellationState = nullptr;
+    pipelineInfo.pViewportState = &viewportInfo;
+    pipelineInfo.pRasterizationState = &rasterInfo;
+    pipelineInfo.pMultisampleState = &multiInfo;
+    pipelineInfo.pDepthStencilState = &dsInfo;
+    pipelineInfo.pDynamicState = &dynamicInfo;
+    pipelineInfo.layout = graphicsPipelineLayout;
+    pipelineInfo.renderPass = VK_NULL_HANDLE; // use dynamic rendering
+    pipelineInfo.subpass = 0;
+    pipelineInfo.basePipelineHandle = VK_NULL_HANDLE; // don't derive pipeline
+    pipelineInfo.basePipelineIndex = 0;
+
+    VKCheck(vkCreateGraphicsPipelines(
+        device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline));
+
+    // Shader modules can be destroyed after the pipeline is created
+    vkDestroyShaderModule(device, vertShader, nullptr);
+    vkDestroyShaderModule(device, fragShader, nullptr);
+}
+
+bool RenderEngine::isPhysicalDeviceValid(
+    VkPhysicalDevice device,
+    VkPhysicalDeviceProperties2* deviceProperties)
+{
+    vkGetPhysicalDeviceProperties2(device, deviceProperties);
+
+    if (deviceProperties->properties.apiVersion < VK_API_VERSION_1_3) return false;
+
+    // query device extensions
+    uint32_t extensionCount = 0;
+    vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, nullptr);
+    std::vector<VkExtensionProperties> extensions(extensionCount);
+    vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, extensions.data());
+
+    for (const char* extensionName : deviceExtensions)
+    {
+        bool extensionFound = false;
+        for (uint32_t i = 0; i < extensionCount; i++)
+        {
+            if (strcmp(extensionName, extensions[i].extensionName) == 0)
+            {
+                extensionFound = true;
+                break;
+            }
+        }
+
+        if (!extensionFound) { return false; }
+    }
+
+    uint32_t queueFamilyCount;
+    vkGetPhysicalDeviceQueueFamilyProperties2(device, &queueFamilyCount, nullptr);
+
+    std::vector<VkQueueFamilyProperties2> queueFamilies(queueFamilyCount, { VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2 });
+    vkGetPhysicalDeviceQueueFamilyProperties2(device, &queueFamilyCount, queueFamilies.data());
+
+    bool graphicsFamilyFound = false;
+    VkBool32 presentSupport = VK_FALSE; // use graphics queue to present
+    for (uint32_t family = 0; family < queueFamilyCount; family++)
+    {
+        vkGetPhysicalDeviceSurfaceSupportKHR(device, family, surface, &presentSupport);
+
+        if (!graphicsFamilyFound &&
+            queueFamilies[family].queueFamilyProperties.queueFlags | VK_QUEUE_GRAPHICS_BIT &&
+            presentSupport == VK_TRUE)
+        {
+            queueFamilyIndices.graphicsFamily = family;
+            graphicsFamilyFound = true;
+        }
+
+        if (graphicsFamilyFound) break;
+    }
+
+    return graphicsFamilyFound;
+}
+
+RenderEngine::FrameData& RenderEngine::getCurrentFrameData()
+{
+    return frames[currentFrameNumber % NUM_FRAMES];
+}
+
+VkShaderModule RenderEngine::loadShaderModule(const char* shaderPath)
+{
+    VkShaderModuleCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    createInfo.pNext = nullptr;
+    createInfo.flags = 0;
+    
+    // load in file
+    // load as binary and place file cursor at the end to get the file size
+    std::ifstream shader(shaderPath, std::ios::binary | std::ios::ate);
+    if (!shader)
+    {
+        std::cout << "Shader load error: Could not open file: " << shaderPath << std::endl;
+        std::abort();
+    }
+
+    size_t codeSize = static_cast<size_t>(shader.tellg());
+    size_t codeSizeAdjusted = codeSize + (codeSize % 4); // ensure code size is a multiple of 4
+
+    // go back to the begining of the file to load it
+    shader.seekg(0, std::ios::beg);
+
+    std::vector<char> shaderCode(codeSizeAdjusted, '\0');
+    if (!shader.read(shaderCode.data(), codeSize))
+    {
+        std::cout << "Shader load error: Could not read file data: " << shaderPath << std::endl;
+        std::abort();
+    }
+
+    createInfo.codeSize = codeSizeAdjusted;
+    createInfo.pCode = reinterpret_cast<uint32_t*>(shaderCode.data());
+
+    VkShaderModule resultShader;
+    VKCheck(vkCreateShaderModule(device, &createInfo, nullptr, &resultShader));
+
+    return resultShader;
+}
+
+VkVertexInputBindingDescription Vertex::getInputBindingDescription()
+{
+    VkVertexInputBindingDescription bindingDesc{};
+    bindingDesc.binding = 0;
+    bindingDesc.stride = sizeof(Vertex);
+    bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    return bindingDesc;
+}
+
+std::array<VkVertexInputAttributeDescription, 2> Vertex::getInputAttributeDescription()
+{
+    std::array<VkVertexInputAttributeDescription, 2> attribDesc;
+
+    // position attrib
+    attribDesc[0].location = 0;
+    attribDesc[0].binding = 0;
+    attribDesc[0].format = VK_FORMAT_R32G32_SFLOAT;
+    attribDesc[0].offset = 0;
+
+    // color attrib
+    attribDesc[1].location = 1;
+    attribDesc[1].binding = 0;
+    attribDesc[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attribDesc[1].offset = sizeof(glm::vec2);
+
+    return attribDesc;
 }
