@@ -53,6 +53,9 @@ int main()
                 // Do nothing.
                 break;
             }
+
+            // render scene
+            renderEngine.render();
         }
 
         SDL_Delay(10);

@@ -62,19 +62,87 @@ void RenderEngine::init(SDL_Window* window)
 
     initSwapchain();
 
-    initCommandBuffers();
+    initFrameData();
 
     initVertexBuffers();
 
     initGraphicsPipeline();
 }
 
+void RenderEngine::render()
+{
+    FrameData& frame = getCurrentFrameData();
+
+    // wait for previous frame to finish
+    VK_Check(vkWaitForFences(
+        device, 1, &frame.renderFence, VK_TRUE, 1'000'000'000));
+
+    // acquire image to draw to
+    uint32_t swapchainIdx;
+    VK_Check(vkAcquireNextImageKHR(
+        device, swapchain, 1'000'000'000, frame.swapchainSemaphore,
+        VK_NULL_HANDLE, &swapchainIdx));
+
+    VK_Check(vkResetFences(device, 1, &frame.renderFence));
+
+    // reset command pool
+    VkCommandBuffer cmd = frame.commandBuffer;
+    VK_Check(vkResetCommandBuffer(cmd, 0));
+
+    // begin and start recording to the command buffer
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.pNext = nullptr;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    beginInfo.pInheritanceInfo = nullptr;
+
+    VK_Check(vkBeginCommandBuffer(cmd, &beginInfo));
+
+    // begin rendering
+    VkRenderingAttachmentInfo colorAttachInfo{};
+    colorAttachInfo.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    colorAttachInfo.pNext = nullptr;
+    colorAttachInfo.imageView = swapchainImageViews[swapchainIdx];
+    colorAttachInfo.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorAttachInfo.resolveMode = VK_RESOLVE_MODE_NONE;
+    colorAttachInfo.resolveImageView = VK_NULL_HANDLE;
+    colorAttachInfo.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachInfo.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachInfo.clearValue = VkClearValue{ VkClearColorValue{0.f, 0.f, 0.f, 1.f} };
+
+    VkRenderingInfo renderInfo{};
+    renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    renderInfo.pNext = nullptr;
+    renderInfo.flags = 0;
+    renderInfo.renderArea = VkRect2D{ VkOffset2D{0, 0}, swapchainExtent};
+    renderInfo.layerCount = 1;
+    renderInfo.viewMask = 0;
+    renderInfo.colorAttachmentCount = 1;
+    renderInfo.pColorAttachments = &colorAttachInfo;
+    renderInfo.pDepthAttachment = nullptr;
+    renderInfo.pStencilAttachment = nullptr;
+
+    vkCmdBeginRendering(cmd, &renderInfo);
+
+    // end command buffer
+    VK_Check(vkEndCommandBuffer(cmd));
+}
+
+void RenderEngine::FrameData::cleanup(VkDevice device)
+{
+    vkDestroySemaphore(device, swapchainSemaphore, nullptr);
+    vkDestroySemaphore(device, renderSemaphore, nullptr);
+
+    vkDestroyFence(device, renderFence, nullptr);
+
+    vkDestroyCommandPool(device, commandPool, nullptr);
+}
+
 void RenderEngine::cleanup()
 {
     for (FrameData& frame : frames)
-    {
-        vkDestroyCommandPool(device, frame.commandPool, nullptr);
-    }
+        frame.cleanup(device);
 
     vkDestroyPipelineLayout(device, graphicsPipelineLayout, nullptr);
     vkDestroyPipeline(device, graphicsPipeline, nullptr);
@@ -222,9 +290,15 @@ void RenderEngine::initDevice()
     dynamicRendering.pNext = nullptr;
     dynamicRendering.dynamicRendering = VK_TRUE;
 
+    // enable synchronization 2
+    VkPhysicalDeviceSynchronization2Features sync2{};
+    sync2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES;
+    sync2.pNext = &dynamicRendering;
+    sync2.synchronization2 = VK_TRUE;
+
     VkPhysicalDeviceFeatures2 features{};
     features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    features.pNext = &dynamicRendering;
+    features.pNext = &sync2;
     features.features = VkPhysicalDeviceFeatures{ VK_FALSE };
 
     VkDeviceCreateInfo deviceCreateInfo{};
@@ -328,7 +402,7 @@ void RenderEngine::initSwapchain()
     vkGetSwapchainImagesKHR(device, swapchain, &swapchainImageCount, swapchainImages.data());
 }
 
-void RenderEngine::initCommandBuffers()
+void RenderEngine::initFrameData()
 {
     // create command pools
     VkCommandPoolCreateInfo poolInfo{};
@@ -349,6 +423,24 @@ void RenderEngine::initCommandBuffers()
     {
         allocInfo.commandPool = frames[i].commandPool;
         VK_Check(vkAllocateCommandBuffers(device, &allocInfo, &frames[i].commandBuffer));
+    }
+
+    // create sync structures
+    VkSemaphoreCreateInfo semInfo{};
+    semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    semInfo.pNext = nullptr;
+    semInfo.flags = 0;
+
+    VkFenceCreateInfo fenceInfo{};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fenceInfo.pNext = nullptr;
+    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT; // fence starts signaled
+
+    for (size_t i = 0; i < NUM_FRAMES; i++)
+    {
+        VK_Check(vkCreateSemaphore(device, &semInfo, nullptr, &frames[i].swapchainSemaphore));
+        VK_Check(vkCreateSemaphore(device, &semInfo, nullptr, &frames[i].renderSemaphore));
+        VK_Check(vkCreateFence(device, &fenceInfo, nullptr, &frames[i].renderFence));
     }
 }
 
