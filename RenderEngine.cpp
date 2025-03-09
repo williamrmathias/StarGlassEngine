@@ -379,7 +379,7 @@ void RenderEngine::initSwapchain()
     swapchainInfo.imageColorSpace = formats[0].colorSpace;
     swapchainInfo.imageExtent = surfaceCaps.currentExtent;
     swapchainInfo.imageArrayLayers = 1;
-    swapchainInfo.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    swapchainInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     swapchainInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     swapchainInfo.queueFamilyIndexCount = 0;
     swapchainInfo.pQueueFamilyIndices = nullptr;
@@ -400,6 +400,34 @@ void RenderEngine::initSwapchain()
 
     swapchainImages.resize(swapchainImageCount);
     vkGetSwapchainImagesKHR(device, swapchain, &swapchainImageCount, swapchainImages.data());
+
+    swapchainImageViews.resize(swapchainImageCount);
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.pNext = nullptr;
+    viewInfo.flags = 0;
+    viewInfo.image = VK_NULL_HANDLE; // set for each view in array
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = swapchainFormat;
+    viewInfo.components = VkComponentMapping{ 
+        .r = VK_COMPONENT_SWIZZLE_IDENTITY, 
+        .g = VK_COMPONENT_SWIZZLE_IDENTITY, 
+        .b = VK_COMPONENT_SWIZZLE_IDENTITY, 
+        .a = VK_COMPONENT_SWIZZLE_IDENTITY 
+    };
+    viewInfo.subresourceRange = VkImageSubresourceRange{
+        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel = 0,
+        .levelCount = 1,
+        .baseArrayLayer = 0,
+        .layerCount = 1
+    };
+    for (uint32_t i = 0; i < swapchainImageCount; i++)
+    {
+        viewInfo.image = swapchainImages[i];
+        VK_Check(vkCreateImageView(device, &viewInfo, nullptr, &swapchainImageViews[i]));
+    }
 }
 
 void RenderEngine::initFrameData()
