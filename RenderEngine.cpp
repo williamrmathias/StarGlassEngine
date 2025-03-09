@@ -80,7 +80,7 @@ void RenderEngine::render()
     // acquire image to draw to
     uint32_t swapchainIdx;
     VK_Check(vkAcquireNextImageKHR(
-        device, swapchain, 1'000'000'000, frame.swapchainSemaphore,
+        device, swapchain, 1'000'000'000, frame.renderSemaphore,
         VK_NULL_HANDLE, &swapchainIdx));
 
     VK_Check(vkResetFences(device, 1, &frame.renderFence));
@@ -97,6 +97,40 @@ void RenderEngine::render()
     beginInfo.pInheritanceInfo = nullptr;
 
     VK_Check(vkBeginCommandBuffer(cmd, &beginInfo));
+
+    // transition swapchain image to color attachment layout
+    VkImageMemoryBarrier2 imageBarrier{};
+    imageBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    imageBarrier.pNext = nullptr;
+    imageBarrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
+    imageBarrier.srcAccessMask = VK_ACCESS_2_NONE;
+    imageBarrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
+    imageBarrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    imageBarrier.srcQueueFamilyIndex = queueFamilyIndices.graphicsFamily;
+    imageBarrier.dstQueueFamilyIndex = queueFamilyIndices.graphicsFamily;
+    imageBarrier.image = swapchainImages[swapchainIdx];
+    imageBarrier.subresourceRange = VkImageSubresourceRange{
+        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel = 0,
+        .levelCount = 1,
+        .baseArrayLayer = 0,
+        .layerCount = 1
+    };
+
+    VkDependencyInfo dependencyInfo{};
+    dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dependencyInfo.pNext = nullptr;
+    dependencyInfo.dependencyFlags = 0;
+    dependencyInfo.memoryBarrierCount = 0;
+    dependencyInfo.pBufferMemoryBarriers = nullptr;
+    dependencyInfo.bufferMemoryBarrierCount = 0;
+    dependencyInfo.pBufferMemoryBarriers = nullptr;
+    dependencyInfo.imageMemoryBarrierCount = 1;
+    dependencyInfo.pImageMemoryBarriers = &imageBarrier;
+
+    vkCmdPipelineBarrier2(cmd, &dependencyInfo);
 
     // begin rendering
     VkRenderingAttachmentInfo colorAttachInfo{};
@@ -125,8 +159,124 @@ void RenderEngine::render()
 
     vkCmdBeginRendering(cmd, &renderInfo);
 
+    // set dynamic viewport and scissor state
+    VkViewport viewport{};
+    viewport.x = 0.f;
+    viewport.y = 0.f;
+    viewport.width = static_cast<float>(swapchainExtent.width);
+    viewport.height = static_cast<float>(swapchainExtent.height);
+    viewport.minDepth = 0.f;
+    viewport.maxDepth = 1.f;
+
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = VkOffset2D{ 0, 0 };
+    scissor.extent = swapchainExtent;
+
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    // bind pipeline
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+
+    // bind vertex buffer
+    VkDeviceSize vertexBufferOffset{ 0 };
+    vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer, &vertexBufferOffset);
+
+    // draw
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+
+    // end rendering
+    vkCmdEndRendering(cmd);
+
+    // transition swapchain image to presentable layout
+    VkImageMemoryBarrier2 imageBarrierPresent{};
+    imageBarrierPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    imageBarrierPresent.pNext = nullptr;
+    imageBarrierPresent.srcStageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
+    imageBarrierPresent.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    imageBarrierPresent.dstStageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
+    imageBarrierPresent.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
+    imageBarrierPresent.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    imageBarrierPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    imageBarrierPresent.srcQueueFamilyIndex = queueFamilyIndices.graphicsFamily;
+    imageBarrierPresent.dstQueueFamilyIndex = queueFamilyIndices.graphicsFamily;
+    imageBarrierPresent.image = swapchainImages[swapchainIdx];
+    imageBarrierPresent.subresourceRange = VkImageSubresourceRange{
+        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel = 0,
+        .levelCount = 1,
+        .baseArrayLayer = 0,
+        .layerCount = 1
+    };
+
+    VkDependencyInfo dependencyInfoPresent{};
+    dependencyInfoPresent.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dependencyInfoPresent.pNext = nullptr;
+    dependencyInfoPresent.dependencyFlags = 0;
+    dependencyInfoPresent.memoryBarrierCount = 0;
+    dependencyInfoPresent.pBufferMemoryBarriers = nullptr;
+    dependencyInfoPresent.bufferMemoryBarrierCount = 0;
+    dependencyInfoPresent.pBufferMemoryBarriers = nullptr;
+    dependencyInfoPresent.imageMemoryBarrierCount = 1;
+    dependencyInfoPresent.pImageMemoryBarriers = &imageBarrierPresent;
+
+    vkCmdPipelineBarrier2(cmd, &dependencyInfoPresent);
+
     // end command buffer
     VK_Check(vkEndCommandBuffer(cmd));
+
+    // submit queue
+    VkSemaphoreSubmitInfo waitInfo{};
+    waitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+    waitInfo.pNext = nullptr;
+    waitInfo.semaphore = frame.renderSemaphore;
+    waitInfo.value = 0; // not a timeline semaphore
+    waitInfo.stageMask = VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT;
+    waitInfo.deviceIndex = 0;
+
+    VkCommandBufferSubmitInfo cmdSubmitInfo{};
+    cmdSubmitInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+    cmdSubmitInfo.pNext = nullptr;
+    cmdSubmitInfo.commandBuffer = cmd;
+    cmdSubmitInfo.deviceMask = 0;
+
+    VkSemaphoreSubmitInfo signalInfo{};
+    signalInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+    signalInfo.pNext = nullptr;
+    signalInfo.semaphore = frame.swapchainSemaphore;
+    signalInfo.value = 0; // not a timeline semaphore
+    signalInfo.stageMask = VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT;
+    signalInfo.deviceIndex = 0;
+
+    VkSubmitInfo2 submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+    submitInfo.pNext = 0;
+    submitInfo.flags = 0;
+    submitInfo.waitSemaphoreInfoCount = 1;
+    submitInfo.pWaitSemaphoreInfos = &waitInfo;
+    submitInfo.commandBufferInfoCount = 1;
+    submitInfo.pCommandBufferInfos = &cmdSubmitInfo;
+    submitInfo.signalSemaphoreInfoCount = 1;
+    submitInfo.pSignalSemaphoreInfos = &signalInfo;
+
+    VK_Check(vkQueueSubmit2(graphicsQueue, 1, &submitInfo, frame.renderFence));
+
+    // present to swapchain
+    VkPresentInfoKHR presentInfo{};
+    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    presentInfo.pNext = nullptr;
+    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.pWaitSemaphores = &frame.swapchainSemaphore;
+    presentInfo.swapchainCount = 1;
+    presentInfo.pSwapchains = &swapchain;
+    presentInfo.pImageIndices = &swapchainIdx;
+    presentInfo.pResults = nullptr;
+
+    VK_Check(vkQueuePresentKHR(graphicsQueue, &presentInfo));
+
+    // update frame
+    incrementFrameData();
 }
 
 void RenderEngine::FrameData::cleanup(VkDevice device)
@@ -141,11 +291,16 @@ void RenderEngine::FrameData::cleanup(VkDevice device)
 
 void RenderEngine::cleanup()
 {
+    vkDeviceWaitIdle(device);
+
     for (FrameData& frame : frames)
         frame.cleanup(device);
 
     vkDestroyPipelineLayout(device, graphicsPipelineLayout, nullptr);
     vkDestroyPipeline(device, graphicsPipeline, nullptr);
+
+    for (VkImageView view : swapchainImageViews)
+        vkDestroyImageView(device, view, nullptr);
 
     vkDestroySwapchainKHR(device, swapchain, nullptr); // also destroys swapchain images
 
@@ -475,9 +630,9 @@ void RenderEngine::initFrameData()
 void RenderEngine::initVertexBuffers()
 {
     std::array<Vertex, 3> vertexData;
-    vertexData[0] = Vertex{ glm::vec2(0.f, 0.f), glm::vec3(1.f, 0.f, 0.f) };
-    vertexData[1] = Vertex{ glm::vec2(0.f, 1.f), glm::vec3(0.f, 1.f, 0.f) };
-    vertexData[2] = Vertex{ glm::vec2(0.f, -1.f), glm::vec3(0.f, 0.f, 1.f) };
+    vertexData[0] = Vertex{ glm::vec2(0.f, -0.5f), glm::vec3(1.f, 0.f, 0.f) };
+    vertexData[1] = Vertex{ glm::vec2(-0.5f, 0.5f), glm::vec3(0.f, 1.f, 0.f) };
+    vertexData[2] = Vertex{ glm::vec2(0.5f, 0.5f), glm::vec3(0.f, 0.f, 1.f) };
 
     VkDeviceSize vertexDataSize = 
         static_cast<VkDeviceSize>(sizeof(vertexData[0]) * vertexData.size());
@@ -735,6 +890,11 @@ RenderEngine::FrameData& RenderEngine::getCurrentFrameData()
     return frames[currentFrameNumber % NUM_FRAMES];
 }
 
+void RenderEngine::incrementFrameData()
+{
+    currentFrameNumber = (currentFrameNumber + 1) % NUM_FRAMES;
+}
+
 VkShaderModule RenderEngine::loadShaderModule(const char* shaderPath)
 {
     VkShaderModuleCreateInfo createInfo{};
@@ -747,7 +907,7 @@ VkShaderModule RenderEngine::loadShaderModule(const char* shaderPath)
     std::ifstream shader(shaderPath, std::ios::binary | std::ios::ate);
     if (!shader)
     {
-        std::cout << "Shader load error: Could not open file: " << shaderPath << std::endl;
+        SDL_LogError(0, "Shader load error: Could not open file: %s\n", shaderPath);
         std::abort();
     }
 
@@ -760,7 +920,7 @@ VkShaderModule RenderEngine::loadShaderModule(const char* shaderPath)
     std::vector<char> shaderCode(codeSizeAdjusted, '\0');
     if (!shader.read(shaderCode.data(), codeSize))
     {
-        std::cout << "Shader load error: Could not read file data: " << shaderPath << std::endl;
+        SDL_LogError(0, "Shader load error: Could not read file data: %s\n", shaderPath);
         std::abort();
     }
 
