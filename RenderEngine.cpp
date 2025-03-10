@@ -141,7 +141,7 @@ void RenderEngine::render()
     colorAttachInfo.resolveMode = VK_RESOLVE_MODE_NONE;
     colorAttachInfo.resolveImageView = VK_NULL_HANDLE;
     colorAttachInfo.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttachInfo.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachInfo.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     colorAttachInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachInfo.clearValue = VkClearValue{ VkClearColorValue{0.f, 0.f, 0.f, 1.f} };
 
@@ -167,13 +167,11 @@ void RenderEngine::render()
     viewport.height = static_cast<float>(swapchainExtent.height);
     viewport.minDepth = 0.f;
     viewport.maxDepth = 1.f;
-
     vkCmdSetViewport(cmd, 0, 1, &viewport);
 
     VkRect2D scissor{};
     scissor.offset = VkOffset2D{ 0, 0 };
     scissor.extent = swapchainExtent;
-
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     // bind pipeline
@@ -660,14 +658,15 @@ void RenderEngine::initVertexBuffers()
     VK_Check(vmaCreateBuffer(
         allocator, &bufferInfo, &allocInfo, &vertexBuffer, &vertexBufferAlloc, nullptr));
 
-    vmaCopyAllocationToMemory(allocator, vertexBufferAlloc, 0, vertexData.data(), vertexDataSize);
-    vmaFlushAllocation(allocator, vertexBufferAlloc, 0, vertexDataSize);
+    vmaCopyMemoryToAllocation(allocator, vertexData.data(), vertexBufferAlloc, 0, vertexDataSize);
 }
 
 void RenderEngine::initGraphicsPipeline()
 {
     VkShaderModule vertShader = loadShaderModule("Shaders/SimpleShader_simpleVS.spirv");
     VkShaderModule fragShader = loadShaderModule("Shaders/SimpleShader_simplePS.spirv");
+    //VkShaderModule vertShader = loadShaderModule("../../Shaders/SimpleShader_simpleVS.spirv");
+    //VkShaderModule fragShader = loadShaderModule("../../Shaders/SimpleShader_simplePS.spirv");
 
     // create shader stages
     std::array<VkPipelineShaderStageCreateInfo, 2> stageInfos;
@@ -763,14 +762,27 @@ void RenderEngine::initGraphicsPipeline()
     dsInfo.maxDepthBounds = 1.f;
 
     // create color blend state
+    VkPipelineColorBlendAttachmentState blendState{};
+    blendState.blendEnable = VK_FALSE;
+    blendState.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    blendState.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blendState.colorBlendOp = VK_BLEND_OP_ADD;
+    blendState.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    blendState.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blendState.alphaBlendOp = VK_BLEND_OP_ADD;
+    blendState.colorWriteMask = VK_COLOR_COMPONENT_R_BIT
+        | VK_COLOR_COMPONENT_G_BIT
+        | VK_COLOR_COMPONENT_B_BIT
+        | VK_COLOR_COMPONENT_A_BIT;
+
     VkPipelineColorBlendStateCreateInfo blendInfo{};
     blendInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     blendInfo.pNext = nullptr;
     blendInfo.flags = 0;
     blendInfo.logicOpEnable = VK_FALSE;
-    blendInfo.logicOp = VK_LOGIC_OP_CLEAR; // ignored
-    blendInfo.attachmentCount = 0;
-    blendInfo.pAttachments = nullptr;
+    blendInfo.logicOp = VK_LOGIC_OP_COPY;
+    blendInfo.attachmentCount = 1;
+    blendInfo.pAttachments = &blendState;
     blendInfo.blendConstants[0] = 0.f;
     blendInfo.blendConstants[1] = 0.f;
     blendInfo.blendConstants[2] = 0.f;
@@ -801,10 +813,20 @@ void RenderEngine::initGraphicsPipeline()
 
     VK_Check(vkCreatePipelineLayout(device, &layoutInfo, nullptr, &graphicsPipelineLayout));
 
+    // rendering create info
+    VkPipelineRenderingCreateInfo renderInfo{};
+    renderInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    renderInfo.pNext = nullptr;
+    renderInfo.viewMask = 0;
+    renderInfo.colorAttachmentCount = 1;
+    renderInfo.pColorAttachmentFormats = &swapchainFormat;
+    renderInfo.depthAttachmentFormat = VK_FORMAT_UNDEFINED;
+    renderInfo.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
+
     // create graphics pipeline
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipelineInfo.pNext = nullptr;
+    pipelineInfo.pNext = &renderInfo;
     pipelineInfo.flags = 0;
     pipelineInfo.stageCount = static_cast<uint32_t>(stageInfos.size());
     pipelineInfo.pStages = stageInfos.data();
@@ -816,6 +838,7 @@ void RenderEngine::initGraphicsPipeline()
     pipelineInfo.pMultisampleState = &multiInfo;
     pipelineInfo.pDepthStencilState = &dsInfo;
     pipelineInfo.pDynamicState = &dynamicInfo;
+    pipelineInfo.pColorBlendState = &blendInfo;
     pipelineInfo.layout = graphicsPipelineLayout;
     pipelineInfo.renderPass = VK_NULL_HANDLE; // use dynamic rendering
     pipelineInfo.subpass = 0;
@@ -951,13 +974,13 @@ std::array<VkVertexInputAttributeDescription, 2> Vertex::getInputAttributeDescri
     attribDesc[0].location = 0;
     attribDesc[0].binding = 0;
     attribDesc[0].format = VK_FORMAT_R32G32_SFLOAT;
-    attribDesc[0].offset = 0;
+    attribDesc[0].offset = offsetof(Vertex, position);
 
     // color attrib
     attribDesc[1].location = 1;
     attribDesc[1].binding = 0;
     attribDesc[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attribDesc[1].offset = sizeof(glm::vec2);
+    attribDesc[1].offset = offsetof(Vertex, color);
 
     return attribDesc;
 }
