@@ -22,9 +22,10 @@
 #include <vector>
 #include <array>
 
-static const std::array<const char*, 2> deviceExtensions = {
+static const std::array<const char*, 3> deviceExtensions = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-    VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME
+    VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
+    VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME
 };
 
 static const uint32_t vkApiVersion = VK_API_VERSION_1_3;
@@ -67,8 +68,14 @@ public:
 
     struct FrameData
     {
+        VkSemaphore swapchainSemaphore;
+        VkSemaphore renderSemaphore;
+        VkFence renderFence;
+
         VkCommandPool commandPool;
         VkCommandBuffer commandBuffer;
+
+        void cleanup(VkDevice device);
     };
     FrameData frames[NUM_FRAMES];
     size_t currentFrameNumber = 0;
@@ -80,6 +87,7 @@ public:
     VkPipeline graphicsPipeline;
 
     void init(SDL_Window* window);
+    void render();
     void cleanup();
 
 private:
@@ -88,12 +96,13 @@ private:
     void initDevice();
     void initVmaAllocator();
     void initSwapchain();
-    void initCommandBuffers();
+    void initFrameData();
     void initVertexBuffers();
     void initGraphicsPipeline();
 
     bool isPhysicalDeviceValid(VkPhysicalDevice device, VkPhysicalDeviceProperties2* deviceProperties);
     FrameData& getCurrentFrameData();
+    void incrementFrameData();
     VkShaderModule loadShaderModule(const char* shaderPath);
 };
 
