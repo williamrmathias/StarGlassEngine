@@ -21,6 +21,7 @@
 // stl
 #include <vector>
 #include <array>
+#include <span>
 
 static const std::array<const char*, 3> deviceExtensions = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME,
@@ -100,6 +101,7 @@ private:
     void initVertexBuffers();
     void initGraphicsPipeline();
 
+    bool containsExtensions(std::span<const char* const> extensionsRequired, std::span<VkExtensionProperties> extensionsAvailable);
     bool isPhysicalDeviceValid(VkPhysicalDevice device, VkPhysicalDeviceProperties2* deviceProperties);
     FrameData& getCurrentFrameData();
     void incrementFrameData();

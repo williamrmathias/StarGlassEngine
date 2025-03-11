@@ -327,7 +327,7 @@ void RenderEngine::initInstance(std::vector<const char*>& instanceExtensions)
     vkEnumerateInstanceVersion(&instanceAPI);
     if (instanceAPI < vkApiVersion)
     {
-        std::cout << "Detected Vulkan Error: Instance does not support Vulkan 1.3" << std::endl;
+        SDL_LogError(0, "Detected Vulkan Error: Instance does not support Vulkan 1.3\n");
         std::abort();
     }
 
@@ -337,6 +337,18 @@ void RenderEngine::initInstance(std::vector<const char*>& instanceExtensions)
     instanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     layers.push_back("VK_LAYER_KHRONOS_validation");
 #endif
+
+    // query device extensions
+    uint32_t extensionCount = 0;
+    vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr);
+    std::vector<VkExtensionProperties> extensions(extensionCount);
+    vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data());
+
+    if (!containsExtensions(instanceExtensions, extensions))
+    {
+        SDL_LogError(0, "Detected Vulkan Error: Instance extensions not supported\n");
+        std::abort();
+    }
 
     // VkApplicationInfo allows the programmer to specifiy some basic information about the
     // program, which can be useful for layers and tools to provide more debug information.
@@ -387,7 +399,7 @@ void RenderEngine::initInstance(std::vector<const char*>& instanceExtensions)
 
     if (createDebugUtilsMessengerEXT == nullptr)
     {
-        std::cout << "Detected Vulkan Error: 'vkCreateDebugUtilsMessengerEXT' not found" << std::endl;
+        SDL_LogError(0, "Detected Vulkan Error: 'vkCreateDebugUtilsMessengerEXT' not found\n");
         std::abort();
     }
 
@@ -420,7 +432,7 @@ void RenderEngine::initPhysicalDevice()
 
     if (!physicalDeviceChosen)
     {
-        std::cout << "Detected Vulkan Error: No Valid Physical Device" << std::endl;
+        SDL_LogError(0, "Detected Vulkan Error: No Valid Physical Device\n");
         std::abort();
     }
 }
@@ -494,7 +506,7 @@ void RenderEngine::initSwapchain()
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &surfaceCaps);
     if (surfaceCaps.maxImageCount < 2)
     {
-        std::cout << "Detected Vulkan Error: Surface doesn't support double buffering" << std::endl;
+        SDL_LogError(0, "Detected Vulkan Error: Surface doesn't support double buffering\n");
         std::abort();
     }
 
@@ -506,7 +518,7 @@ void RenderEngine::initSwapchain()
     vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, presentModes.data());
     if (std::find(presentModes.begin(), presentModes.end(), VK_PRESENT_MODE_FIFO_KHR) == presentModes.end())
     {
-        std::cout << "Detected Vulkan Error: Surface doesn't support FIFO present mode" << std::endl;
+        SDL_LogError(0, "Detected Vulkan Error: Surface doesn't support FIFO present mode\n");
         std::abort();
     }
 
@@ -515,7 +527,7 @@ void RenderEngine::initSwapchain()
     vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, nullptr);
     if (formatCount == 0)
     {
-        std::cout << "Detected Vulkan Error: Surface doesn't support any image formats" << std::endl;
+        SDL_LogError(0, "Detected Vulkan Error: Surface doesn't support any image formats\n");
         std::abort();
     }
 
@@ -665,8 +677,6 @@ void RenderEngine::initGraphicsPipeline()
 {
     VkShaderModule vertShader = loadShaderModule("Shaders/SimpleShader_simpleVS.spirv");
     VkShaderModule fragShader = loadShaderModule("Shaders/SimpleShader_simplePS.spirv");
-    //VkShaderModule vertShader = loadShaderModule("../../Shaders/SimpleShader_simpleVS.spirv");
-    //VkShaderModule fragShader = loadShaderModule("../../Shaders/SimpleShader_simplePS.spirv");
 
     // create shader stages
     std::array<VkPipelineShaderStageCreateInfo, 2> stageInfos;
@@ -853,6 +863,27 @@ void RenderEngine::initGraphicsPipeline()
     vkDestroyShaderModule(device, fragShader, nullptr);
 }
 
+bool RenderEngine::containsExtensions(
+    std::span<const char* const> extensionsRequired, std::span<VkExtensionProperties> extensionsAvailable)
+{
+    for (const char* extensionReq : extensionsRequired)
+    {
+        bool extensionFound = false;
+        for (const VkExtensionProperties& extensionProp : extensionsAvailable)
+        {
+            if (strcmp(extensionReq, extensionProp.extensionName))
+            {
+                extensionFound = true;
+                break;
+            }
+        }
+
+        if (!extensionFound) { return false; }
+    }
+
+    return true;
+}
+
 bool RenderEngine::isPhysicalDeviceValid(
     VkPhysicalDevice device,
     VkPhysicalDeviceProperties2* deviceProperties)
@@ -867,20 +898,7 @@ bool RenderEngine::isPhysicalDeviceValid(
     std::vector<VkExtensionProperties> extensions(extensionCount);
     vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, extensions.data());
 
-    for (const char* extensionName : deviceExtensions)
-    {
-        bool extensionFound = false;
-        for (uint32_t i = 0; i < extensionCount; i++)
-        {
-            if (strcmp(extensionName, extensions[i].extensionName) == 0)
-            {
-                extensionFound = true;
-                break;
-            }
-        }
-
-        if (!extensionFound) { return false; }
-    }
+    if (!containsExtensions(deviceExtensions, extensions)) { return false; }
 
     uint32_t queueFamilyCount;
     vkGetPhysicalDeviceQueueFamilyProperties2(device, &queueFamilyCount, nullptr);
