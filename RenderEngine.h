@@ -84,6 +84,9 @@ public:
     VkBuffer vertexBuffer;
     VmaAllocation vertexBufferAlloc;
 
+    VkBuffer indexBuffer;
+    VmaAllocation indexBufferAlloc;
+
     VkPipelineLayout graphicsPipelineLayout;
     VkPipeline graphicsPipeline;
 
@@ -98,7 +101,7 @@ private:
     void initVmaAllocator();
     void initSwapchain();
     void initFrameData();
-    void initVertexBuffers();
+    void initGeometryBuffers();
     void initGraphicsPipeline();
 
     bool containsExtensions(std::span<const char* const> extensionsRequired, std::span<VkExtensionProperties> extensionsAvailable);

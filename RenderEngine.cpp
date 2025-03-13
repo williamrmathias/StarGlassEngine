@@ -64,7 +64,7 @@ void RenderEngine::init(SDL_Window* window)
 
     initFrameData();
 
-    initVertexBuffers();
+    initGeometryBuffers();
 
     initGraphicsPipeline();
 }
@@ -177,12 +177,15 @@ void RenderEngine::render()
     // bind pipeline
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 
-    // bind vertex buffer
+    // bind geometry buffers
     VkDeviceSize vertexBufferOffset{ 0 };
     vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer, &vertexBufferOffset);
 
+    VkDeviceSize indexBufferOffset{ 0 };
+    vkCmdBindIndexBuffer(cmd, indexBuffer, indexBufferOffset, VK_INDEX_TYPE_UINT16);
+
     // draw
-    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdDrawIndexed(cmd, 6, 2, 0, 0, 0);
 
     // end rendering
     vkCmdEndRendering(cmd);
@@ -303,6 +306,7 @@ void RenderEngine::cleanup()
     vkDestroySwapchainKHR(device, swapchain, nullptr); // also destroys swapchain images
 
     vmaDestroyBuffer(allocator, vertexBuffer, vertexBufferAlloc);
+    vmaDestroyBuffer(allocator, indexBuffer, indexBufferAlloc);
 
     vmaDestroyAllocator(allocator);
 
@@ -637,12 +641,14 @@ void RenderEngine::initFrameData()
     }
 }
 
-void RenderEngine::initVertexBuffers()
+void RenderEngine::initGeometryBuffers()
 {
-    std::array<Vertex, 3> vertexData;
-    vertexData[0] = Vertex{ glm::vec2(0.f, -0.5f), glm::vec3(1.f, 0.f, 0.f) };
+    // create vertex buffer
+    std::array<Vertex, 4> vertexData;
+    vertexData[0] = Vertex{ glm::vec2(-0.5f, -0.5f), glm::vec3(1.f, 0.f, 0.f) };
     vertexData[1] = Vertex{ glm::vec2(-0.5f, 0.5f), glm::vec3(0.f, 1.f, 0.f) };
     vertexData[2] = Vertex{ glm::vec2(0.5f, 0.5f), glm::vec3(0.f, 0.f, 1.f) };
+    vertexData[3] = Vertex{ glm::vec2(0.5, -0.5f), glm::vec3(0.f, 1.f, 0.f) };
 
     VkDeviceSize vertexDataSize = 
         static_cast<VkDeviceSize>(sizeof(vertexData[0]) * vertexData.size());
@@ -671,6 +677,36 @@ void RenderEngine::initVertexBuffers()
         allocator, &bufferInfo, &allocInfo, &vertexBuffer, &vertexBufferAlloc, nullptr));
 
     vmaCopyMemoryToAllocation(allocator, vertexData.data(), vertexBufferAlloc, 0, vertexDataSize);
+
+    // create index buffer
+    std::array<uint16_t, 6> indexData{ 0, 1, 2, 0, 2, 3 };
+
+    VkDeviceSize indexDataSize = static_cast<VkDeviceSize>(sizeof(indexData[0]) * indexData.size());
+
+    VkBufferCreateInfo idxBufferInfo{};
+    idxBufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    idxBufferInfo.pNext = nullptr;
+    idxBufferInfo.flags = 0;
+    idxBufferInfo.size = indexDataSize;
+    idxBufferInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+    idxBufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // exclusive to graphics queue
+    idxBufferInfo.queueFamilyIndexCount = 0;
+    idxBufferInfo.pQueueFamilyIndices = nullptr;
+
+    VmaAllocationCreateInfo idxAllocInfo{};
+    idxAllocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+    idxAllocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+    idxAllocInfo.requiredFlags = 0;
+    idxAllocInfo.preferredFlags = 0;
+    idxAllocInfo.memoryTypeBits = 0;
+    idxAllocInfo.pool = VMA_NULL;
+    idxAllocInfo.pUserData = nullptr;
+    idxAllocInfo.priority = 0.f;
+
+    VK_Check(vmaCreateBuffer(
+        allocator, &idxBufferInfo, &idxAllocInfo, &indexBuffer, &indexBufferAlloc, nullptr));
+
+    vmaCopyMemoryToAllocation(allocator, indexData.data(), indexBufferAlloc, 0, indexDataSize);
 }
 
 void RenderEngine::initGraphicsPipeline()
