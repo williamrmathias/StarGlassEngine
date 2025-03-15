@@ -10,6 +10,7 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_syswm.h>
 #include <SDL2/SDL_vulkan.h>
+#include <SDL2/SDL_filesystem.h>
 
 // VMA
 #include <vma/vk_mem_alloc.h>
@@ -31,7 +32,7 @@ static const std::array<const char*, 3> deviceExtensions = {
 
 static const uint32_t vkApiVersion = VK_API_VERSION_1_3;
 
-const size_t NUM_FRAMES = 2;
+static const size_t NUM_FRAMES = 2;
 
 struct Vertex
 {

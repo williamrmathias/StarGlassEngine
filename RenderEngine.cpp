@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <iostream>
 #include <fstream>
+#include <filesystem>
+#include <utility>
 
 
 static inline void VK_Check(VkResult result)
@@ -31,6 +33,7 @@ static inline void SDL_Check(SDL_bool result)
     }
 }
 
+#if defined(_DEBUG)
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
     VkDebugUtilsMessageTypeFlagsEXT messageType,
@@ -40,6 +43,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     SDL_LogError(0, "Vulkan Validation Layer: %s\n", pCallbackData->pMessage);
     return VK_FALSE;
 }
+#endif
 
 void RenderEngine::init(SDL_Window* window)
 {
@@ -67,6 +71,47 @@ void RenderEngine::init(SDL_Window* window)
     initGeometryBuffers();
 
     initGraphicsPipeline();
+}
+
+static void transitionImageLayout(
+    VkCommandBuffer cmd,
+    VkImage image,
+    VkImageLayout oldLayout, VkImageLayout newLayout,
+    VkPipelineStageFlags2 srcStage, VkPipelineStageFlags2 dstStage, 
+    VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask)
+{
+    VkImageMemoryBarrier2 imageBarrier{};
+    imageBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    imageBarrier.pNext = nullptr;
+    imageBarrier.srcStageMask = srcStage;
+    imageBarrier.srcAccessMask = srcAccessMask;
+    imageBarrier.dstStageMask = dstStage;
+    imageBarrier.dstAccessMask = dstAccessMask;
+    imageBarrier.oldLayout = oldLayout;
+    imageBarrier.newLayout = newLayout;
+    imageBarrier.srcQueueFamilyIndex = 0; // not changing families
+    imageBarrier.dstQueueFamilyIndex = 0;
+    imageBarrier.image = image;
+    imageBarrier.subresourceRange = VkImageSubresourceRange{
+        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel = 0,
+        .levelCount = 1,
+        .baseArrayLayer = 0,
+        .layerCount = 1
+    };
+
+    VkDependencyInfo dependencyInfo{};
+    dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dependencyInfo.pNext = nullptr;
+    dependencyInfo.dependencyFlags = 0;
+    dependencyInfo.memoryBarrierCount = 0;
+    dependencyInfo.pBufferMemoryBarriers = nullptr;
+    dependencyInfo.bufferMemoryBarrierCount = 0;
+    dependencyInfo.pBufferMemoryBarriers = nullptr;
+    dependencyInfo.imageMemoryBarrierCount = 1;
+    dependencyInfo.pImageMemoryBarriers = &imageBarrier;
+
+    vkCmdPipelineBarrier2(cmd, &dependencyInfo);
 }
 
 void RenderEngine::render()
@@ -99,38 +144,12 @@ void RenderEngine::render()
     VK_Check(vkBeginCommandBuffer(cmd, &beginInfo));
 
     // transition swapchain image to color attachment layout
-    VkImageMemoryBarrier2 imageBarrier{};
-    imageBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    imageBarrier.pNext = nullptr;
-    imageBarrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
-    imageBarrier.srcAccessMask = VK_ACCESS_2_NONE;
-    imageBarrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
-    imageBarrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    imageBarrier.srcQueueFamilyIndex = queueFamilyIndices.graphicsFamily;
-    imageBarrier.dstQueueFamilyIndex = queueFamilyIndices.graphicsFamily;
-    imageBarrier.image = swapchainImages[swapchainIdx];
-    imageBarrier.subresourceRange = VkImageSubresourceRange{
-        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-        .baseMipLevel = 0,
-        .levelCount = 1,
-        .baseArrayLayer = 0,
-        .layerCount = 1
-    };
-
-    VkDependencyInfo dependencyInfo{};
-    dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    dependencyInfo.pNext = nullptr;
-    dependencyInfo.dependencyFlags = 0;
-    dependencyInfo.memoryBarrierCount = 0;
-    dependencyInfo.pBufferMemoryBarriers = nullptr;
-    dependencyInfo.bufferMemoryBarrierCount = 0;
-    dependencyInfo.pBufferMemoryBarriers = nullptr;
-    dependencyInfo.imageMemoryBarrierCount = 1;
-    dependencyInfo.pImageMemoryBarriers = &imageBarrier;
-
-    vkCmdPipelineBarrier2(cmd, &dependencyInfo);
+    transitionImageLayout(
+        cmd, swapchainImages[swapchainIdx],
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 
+        0, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
+    );
 
     // begin rendering
     VkRenderingAttachmentInfo colorAttachInfo{};
@@ -185,44 +204,18 @@ void RenderEngine::render()
     vkCmdBindIndexBuffer(cmd, indexBuffer, indexBufferOffset, VK_INDEX_TYPE_UINT16);
 
     // draw
-    vkCmdDrawIndexed(cmd, 6, 2, 0, 0, 0);
+    vkCmdDrawIndexed(cmd, 6, 1, 0, 0, 0);
 
     // end rendering
     vkCmdEndRendering(cmd);
 
     // transition swapchain image to presentable layout
-    VkImageMemoryBarrier2 imageBarrierPresent{};
-    imageBarrierPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    imageBarrierPresent.pNext = nullptr;
-    imageBarrierPresent.srcStageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
-    imageBarrierPresent.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    imageBarrierPresent.dstStageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
-    imageBarrierPresent.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
-    imageBarrierPresent.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    imageBarrierPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    imageBarrierPresent.srcQueueFamilyIndex = queueFamilyIndices.graphicsFamily;
-    imageBarrierPresent.dstQueueFamilyIndex = queueFamilyIndices.graphicsFamily;
-    imageBarrierPresent.image = swapchainImages[swapchainIdx];
-    imageBarrierPresent.subresourceRange = VkImageSubresourceRange{
-        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-        .baseMipLevel = 0,
-        .levelCount = 1,
-        .baseArrayLayer = 0,
-        .layerCount = 1
-    };
-
-    VkDependencyInfo dependencyInfoPresent{};
-    dependencyInfoPresent.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    dependencyInfoPresent.pNext = nullptr;
-    dependencyInfoPresent.dependencyFlags = 0;
-    dependencyInfoPresent.memoryBarrierCount = 0;
-    dependencyInfoPresent.pBufferMemoryBarriers = nullptr;
-    dependencyInfoPresent.bufferMemoryBarrierCount = 0;
-    dependencyInfoPresent.pBufferMemoryBarriers = nullptr;
-    dependencyInfoPresent.imageMemoryBarrierCount = 1;
-    dependencyInfoPresent.pImageMemoryBarriers = &imageBarrierPresent;
-
-    vkCmdPipelineBarrier2(cmd, &dependencyInfoPresent);
+    transitionImageLayout(
+        cmd, swapchainImages[swapchainIdx],
+        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
+        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, 0
+    );
 
     // end command buffer
     VK_Check(vkEndCommandBuffer(cmd));
@@ -641,24 +634,20 @@ void RenderEngine::initFrameData()
     }
 }
 
-void RenderEngine::initGeometryBuffers()
+/*
+* creates, allocates, and copies data for a Buffer object
+*/
+static void createBuffer(
+    VmaAllocator allocator,
+    void* data, VkDeviceSize dataSize, VkBufferUsageFlags usage,
+    VkBuffer& buffer, VmaAllocation& allocation)
 {
-    // create vertex buffer
-    std::array<Vertex, 4> vertexData;
-    vertexData[0] = Vertex{ glm::vec2(-0.5f, -0.5f), glm::vec3(1.f, 0.f, 0.f) };
-    vertexData[1] = Vertex{ glm::vec2(-0.5f, 0.5f), glm::vec3(0.f, 1.f, 0.f) };
-    vertexData[2] = Vertex{ glm::vec2(0.5f, 0.5f), glm::vec3(0.f, 0.f, 1.f) };
-    vertexData[3] = Vertex{ glm::vec2(0.5, -0.5f), glm::vec3(0.f, 1.f, 0.f) };
-
-    VkDeviceSize vertexDataSize = 
-        static_cast<VkDeviceSize>(sizeof(vertexData[0]) * vertexData.size());
-
     VkBufferCreateInfo bufferInfo{};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufferInfo.pNext = nullptr;
     bufferInfo.flags = 0;
-    bufferInfo.size = vertexDataSize;
-    bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    bufferInfo.size = dataSize;
+    bufferInfo.usage = usage;
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // exclusive to graphics queue
     bufferInfo.queueFamilyIndexCount = 0;
     bufferInfo.pQueueFamilyIndices = nullptr;
@@ -673,46 +662,47 @@ void RenderEngine::initGeometryBuffers()
     allocInfo.pUserData = nullptr;
     allocInfo.priority = 0.f;
 
-    VK_Check(vmaCreateBuffer(
-        allocator, &bufferInfo, &allocInfo, &vertexBuffer, &vertexBufferAlloc, nullptr));
+    VK_Check(vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &buffer, &allocation, nullptr));
+    vmaCopyMemoryToAllocation(allocator, data, allocation, 0, dataSize);
+}
 
-    vmaCopyMemoryToAllocation(allocator, vertexData.data(), vertexBufferAlloc, 0, vertexDataSize);
+void RenderEngine::initGeometryBuffers()
+{
+    // create vertex buffer
+    std::array<Vertex, 4> vertexData;
+    vertexData[0] = Vertex{ glm::vec2(-0.5f, -0.5f), glm::vec3(1.f, 0.f, 0.f) };
+    vertexData[1] = Vertex{ glm::vec2(-0.5f, 0.5f), glm::vec3(0.f, 1.f, 0.f) };
+    vertexData[2] = Vertex{ glm::vec2(0.5f, 0.5f), glm::vec3(0.f, 0.f, 1.f) };
+    vertexData[3] = Vertex{ glm::vec2(0.5, -0.5f), glm::vec3(1.f, 1.f, 1.f) };
+
+    VkDeviceSize vertexDataSize = 
+        static_cast<VkDeviceSize>(sizeof(vertexData[0]) * vertexData.size());
+
+    createBuffer(
+        allocator, 
+        vertexData.data(), vertexDataSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, 
+        vertexBuffer, vertexBufferAlloc
+    );
 
     // create index buffer
     std::array<uint16_t, 6> indexData{ 0, 1, 2, 0, 2, 3 };
 
     VkDeviceSize indexDataSize = static_cast<VkDeviceSize>(sizeof(indexData[0]) * indexData.size());
 
-    VkBufferCreateInfo idxBufferInfo{};
-    idxBufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    idxBufferInfo.pNext = nullptr;
-    idxBufferInfo.flags = 0;
-    idxBufferInfo.size = indexDataSize;
-    idxBufferInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-    idxBufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // exclusive to graphics queue
-    idxBufferInfo.queueFamilyIndexCount = 0;
-    idxBufferInfo.pQueueFamilyIndices = nullptr;
-
-    VmaAllocationCreateInfo idxAllocInfo{};
-    idxAllocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-    idxAllocInfo.usage = VMA_MEMORY_USAGE_AUTO;
-    idxAllocInfo.requiredFlags = 0;
-    idxAllocInfo.preferredFlags = 0;
-    idxAllocInfo.memoryTypeBits = 0;
-    idxAllocInfo.pool = VMA_NULL;
-    idxAllocInfo.pUserData = nullptr;
-    idxAllocInfo.priority = 0.f;
-
-    VK_Check(vmaCreateBuffer(
-        allocator, &idxBufferInfo, &idxAllocInfo, &indexBuffer, &indexBufferAlloc, nullptr));
-
-    vmaCopyMemoryToAllocation(allocator, indexData.data(), indexBufferAlloc, 0, indexDataSize);
+    createBuffer(
+        allocator,
+        indexData.data(), indexDataSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+        indexBuffer, indexBufferAlloc
+    );
 }
 
 void RenderEngine::initGraphicsPipeline()
 {
-    VkShaderModule vertShader = loadShaderModule("Shaders/SimpleShader_simpleVS.spirv");
-    VkShaderModule fragShader = loadShaderModule("Shaders/SimpleShader_simplePS.spirv");
+    std::filesystem::path vertexShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/SimpleShader_simpleVS.spirv");
+    std::filesystem::path fragmentShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/SimpleShader_simplePS.spirv");
+
+    VkShaderModule vertShader = loadShaderModule(vertexShaderPath.string().c_str());
+    VkShaderModule fragShader = loadShaderModule(fragmentShaderPath.string().c_str());
 
     // create shader stages
     std::array<VkPipelineShaderStageCreateInfo, 2> stageInfos;
@@ -907,7 +897,7 @@ bool RenderEngine::containsExtensions(
         bool extensionFound = false;
         for (const VkExtensionProperties& extensionProp : extensionsAvailable)
         {
-            if (strcmp(extensionReq, extensionProp.extensionName))
+            if (strcmp(extensionReq, extensionProp.extensionName) == 0)
             {
                 extensionFound = true;
                 break;
