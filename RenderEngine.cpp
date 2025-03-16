@@ -12,8 +12,10 @@
 #include <iostream>
 #include <fstream>
 #include <filesystem>
-#include <utility>
 
+// cgltf
+#define CGLTF_IMPLEMENTATION
+#include <cgltf.h>
 
 static inline void VK_Check(VkResult result)
 {
@@ -998,6 +1000,131 @@ VkShaderModule RenderEngine::loadShaderModule(const char* shaderPath)
     VK_Check(vkCreateShaderModule(device, &createInfo, nullptr, &resultShader));
 
     return resultShader;
+}
+
+struct ScopedGLTFData
+{
+    cgltf_data* data;
+
+    cgltf_data* operator->() const { return data; }
+
+    ~ScopedGLTFData()
+    {
+        cgltf_free(data);
+    }
+};
+
+StaticMesh RenderEngine::loadStaticMesh(const char* meshPath)
+{
+    cgltf_options options{}; // default loading options
+    ScopedGLTFData gltfData;
+
+    cgltf_result result = cgltf_parse_file(&options, meshPath, &gltfData.data);
+    if (result != cgltf_result_success || gltfData.data == nullptr)
+    {
+        SDL_LogError(0, "Mesh load error: Could not read file data: %s\n", meshPath);
+        SDL_LogError(0, "GLTF load error code: %i\n", result);
+        std::abort();
+    }
+
+    result = cgltf_load_buffers(&options, gltfData.data, meshPath);
+    if (result != cgltf_result_success)
+    {
+        SDL_LogError(0, "Mesh load error: Could not read buffer data: %s\n", meshPath);
+        SDL_LogError(0, "GLTF load error code: %i\n", result);
+        std::abort();
+    }
+
+    if (gltfData->meshes_count < 1)
+    {
+        SDL_LogError(0, "Mesh load error: Read file contains no meshes: %s\n", meshPath);
+        std::abort();
+    }
+
+    cgltf_mesh* gltfMesh = &gltfData->meshes[0];
+
+    StaticMesh newMesh;
+    newMesh.surfaces.reserve(gltfMesh->primitives_count);
+
+    // sratch buffer data
+    std::vector<uint16_t> index16Data;
+    std::vector<uint32_t> index32Data;
+
+    std::vector<Vertex> vertexData;
+
+    for (cgltf_size i = 0; i < gltfMesh->primitives_count; i++)
+    {
+        MeshSurface newSurface;
+        cgltf_primitive* surface = &gltfMesh->primitives[i];
+
+        // get primative topology
+        // TODO: Implement rendering all topology types
+        switch (surface->type) 
+        {
+        //case cgltf_primitive_type_points:
+        //    newMesh.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+        //    break;
+        //case cgltf_primitive_type_lines:
+        //    newMesh.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+        //    break;
+        //case cgltf_primitive_type_line_strip:
+        //    newMesh.topology = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
+        //    break;
+        case cgltf_primitive_type_triangles:
+            newSurface.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            break;
+        //case cgltf_primitive_type_triangle_strip:
+        //    newMesh.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+        //    break;
+        //case cgltf_primitive_type_triangle_fan:
+        //    newMesh.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
+        //    break;
+        default:
+            SDL_LogError(
+                0, "Mesh load error: Mesh primitive contains invalid topology: %s\n", meshPath);
+            SDL_LogError(0, "GLTF topology code: %i\n", cgltf_primitive_type_points);
+            std::abort();
+        }
+
+        // load index buffers
+        void* indexData;
+        cgltf_size indexWidth;
+        cgltf_size indexCount = cgltf_accessor_unpack_indices(surface->indices, nullptr, 0, 0);
+        switch (surface->indices->component_type)
+        {
+        case cgltf_component_type_r_16u:
+            newSurface.indexType = VK_INDEX_TYPE_UINT16;
+            index16Data.resize(indexCount);
+            indexData = static_cast<void*>(index16Data.data());
+            indexWidth = 16;
+            break;
+        case cgltf_component_type_r_32u:
+            newSurface.indexType = VK_INDEX_TYPE_UINT32;
+            index32Data.resize(indexCount);
+            indexData = static_cast<void*>(index32Data.data());
+            indexWidth = 32;
+            break;
+        default:
+            SDL_LogError(
+                0, "Mesh load error: Mesh primitive invalid index format: %s\n", meshPath);
+            std::abort();
+        }
+
+        cgltf_accessor_unpack_indices(surface->indices, indexData, indexWidth, indexCount);
+
+        createBuffer(
+            allocator, 
+            indexData, static_cast<VkDeviceSize>(indexCount * indexWidth), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+            newSurface.indexBuffer, newSurface.indexAlloc
+        );
+
+        // load vertex attributes
+        // just load one float3 position and one float3 color (TODO: Load other attributes)
+
+        // position
+        const cgltf_accessor* positionAcc = 
+            cgltf_find_accessor(surface, cgltf_attribute_type_position, 0);
+    }
 }
 
 VkVertexInputBindingDescription Vertex::getInputBindingDescription()

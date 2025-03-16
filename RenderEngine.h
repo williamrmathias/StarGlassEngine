@@ -36,11 +36,28 @@ static const size_t NUM_FRAMES = 2;
 
 struct Vertex
 {
-    glm::vec2 position;
+    glm::vec3 position;
     glm::vec3 color;
 
     static VkVertexInputBindingDescription getInputBindingDescription();
     static std::array<VkVertexInputAttributeDescription, 2> getInputAttributeDescription();
+};
+
+struct MeshSurface
+{
+    VkBuffer vertexBuffer;
+    VmaAllocation vertexAlloc;
+
+    VkBuffer indexBuffer;
+    VmaAllocation indexAlloc;
+
+    VkPrimitiveTopology topology;
+    VkIndexType indexType;
+};
+
+struct StaticMesh
+{
+    std::vector<MeshSurface> surfaces;
 };
 
 class RenderEngine
@@ -110,5 +127,6 @@ private:
     FrameData& getCurrentFrameData();
     void incrementFrameData();
     VkShaderModule loadShaderModule(const char* shaderPath);
+    StaticMesh loadStaticMesh(const char* meshPath);
 };
 
