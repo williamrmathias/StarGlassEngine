@@ -7,6 +7,9 @@
 #define VMA_IMPLEMENTATION
 #include <vma/vk_mem_alloc.h>
 
+// glm
+#include <glm/gtc/type_ptr.hpp>
+
 // stl
 #include <algorithm>
 #include <iostream>
@@ -198,15 +201,29 @@ void RenderEngine::render()
     // bind pipeline
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 
-    // bind geometry buffers
-    VkDeviceSize vertexBufferOffset{ 0 };
-    vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer, &vertexBufferOffset);
+    // draw static mesh
+    if (staticMesh.has_value())
+    {
+        for (MeshSurface& surface : staticMesh.value().surfaces)
+        {
+            VkDeviceSize vertexBufferOffset{ 0 };
+            vkCmdBindVertexBuffers(cmd, 0, 1, &surface.vertexBuffer, &vertexBufferOffset);
 
-    VkDeviceSize indexBufferOffset{ 0 };
-    vkCmdBindIndexBuffer(cmd, indexBuffer, indexBufferOffset, VK_INDEX_TYPE_UINT16);
+            VkDeviceSize indexBufferOffset{ 0 };
+            vkCmdBindIndexBuffer(cmd, surface.indexBuffer, indexBufferOffset, surface.indexType);
 
-    // draw
-    vkCmdDrawIndexed(cmd, 6, 1, 0, 0, 0);
+            vkCmdDrawIndexed(cmd, surface.indexCount, 1, 0, 0, 0);
+        }
+    }
+
+    //VkDeviceSize vertexBufferOffset{ 0 };
+    //vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer, &vertexBufferOffset);
+
+    //VkDeviceSize indexBufferOffset{ 0 };
+    //vkCmdBindIndexBuffer(cmd, indexBuffer, indexBufferOffset, VK_INDEX_TYPE_UINT16);
+
+    //// draw
+    //vkCmdDrawIndexed(cmd, 6, 1, 0, 0, 0);
 
     // end rendering
     vkCmdEndRendering(cmd);
@@ -285,6 +302,15 @@ void RenderEngine::FrameData::cleanup(VkDevice device)
     vkDestroyCommandPool(device, commandPool, nullptr);
 }
 
+void StaticMesh::cleanup(VmaAllocator allocator)
+{
+    for (MeshSurface& surface : surfaces)
+    {
+        vmaDestroyBuffer(allocator, surface.indexBuffer, surface.indexAlloc);
+        vmaDestroyBuffer(allocator, surface.vertexBuffer, surface.vertexAlloc);
+    }
+}
+
 void RenderEngine::cleanup()
 {
     vkDeviceWaitIdle(device);
@@ -302,6 +328,9 @@ void RenderEngine::cleanup()
 
     vmaDestroyBuffer(allocator, vertexBuffer, vertexBufferAlloc);
     vmaDestroyBuffer(allocator, indexBuffer, indexBufferAlloc);
+
+    if (staticMesh.has_value())
+        staticMesh.value().cleanup(allocator);
 
     vmaDestroyAllocator(allocator);
 
@@ -672,10 +701,10 @@ void RenderEngine::initGeometryBuffers()
 {
     // create vertex buffer
     std::array<Vertex, 4> vertexData;
-    vertexData[0] = Vertex{ glm::vec2(-0.5f, -0.5f), glm::vec3(1.f, 0.f, 0.f) };
-    vertexData[1] = Vertex{ glm::vec2(-0.5f, 0.5f), glm::vec3(0.f, 1.f, 0.f) };
-    vertexData[2] = Vertex{ glm::vec2(0.5f, 0.5f), glm::vec3(0.f, 0.f, 1.f) };
-    vertexData[3] = Vertex{ glm::vec2(0.5, -0.5f), glm::vec3(1.f, 1.f, 1.f) };
+    vertexData[0] = Vertex{ glm::vec3(-0.5f, -0.5f, 0.f), glm::vec3(1.f, 0.f, 0.f) };
+    vertexData[1] = Vertex{ glm::vec3(-0.5f, 0.5f, 0.f), glm::vec3(0.f, 1.f, 0.f) };
+    vertexData[2] = Vertex{ glm::vec3(0.5f, 0.5f, 0.f), glm::vec3(0.f, 0.f, 1.f) };
+    vertexData[3] = Vertex{ glm::vec3(0.5, -0.5f, 0.f), glm::vec3(1.f, 1.f, 1.f) };
 
     VkDeviceSize vertexDataSize = 
         static_cast<VkDeviceSize>(sizeof(vertexData[0]) * vertexData.size());
@@ -696,6 +725,10 @@ void RenderEngine::initGeometryBuffers()
         indexData.data(), indexDataSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
         indexBuffer, indexBufferAlloc
     );
+
+    // load cube mesh
+    std::filesystem::path boxPath = std::filesystem::current_path() / std::filesystem::path("Assets/Box.glb");
+    staticMesh = loadStaticMesh(boxPath.string().c_str());
 }
 
 void RenderEngine::initGraphicsPipeline()
@@ -1014,7 +1047,7 @@ struct ScopedGLTFData
     }
 };
 
-StaticMesh RenderEngine::loadStaticMesh(const char* meshPath)
+std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
 {
     cgltf_options options{}; // default loading options
     ScopedGLTFData gltfData;
@@ -1024,7 +1057,7 @@ StaticMesh RenderEngine::loadStaticMesh(const char* meshPath)
     {
         SDL_LogError(0, "Mesh load error: Could not read file data: %s\n", meshPath);
         SDL_LogError(0, "GLTF load error code: %i\n", result);
-        std::abort();
+        return std::nullopt;
     }
 
     result = cgltf_load_buffers(&options, gltfData.data, meshPath);
@@ -1032,13 +1065,13 @@ StaticMesh RenderEngine::loadStaticMesh(const char* meshPath)
     {
         SDL_LogError(0, "Mesh load error: Could not read buffer data: %s\n", meshPath);
         SDL_LogError(0, "GLTF load error code: %i\n", result);
-        std::abort();
+        return std::nullopt;
     }
 
     if (gltfData->meshes_count < 1)
     {
         SDL_LogError(0, "Mesh load error: Read file contains no meshes: %s\n", meshPath);
-        std::abort();
+        return std::nullopt;
     }
 
     cgltf_mesh* gltfMesh = &gltfData->meshes[0];
@@ -1049,6 +1082,9 @@ StaticMesh RenderEngine::loadStaticMesh(const char* meshPath)
     // sratch buffer data
     std::vector<uint16_t> index16Data;
     std::vector<uint32_t> index32Data;
+
+    std::vector<float> positionData;
+    std::vector<float> colorData;
 
     std::vector<Vertex> vertexData;
 
@@ -1083,10 +1119,16 @@ StaticMesh RenderEngine::loadStaticMesh(const char* meshPath)
             SDL_LogError(
                 0, "Mesh load error: Mesh primitive contains invalid topology: %s\n", meshPath);
             SDL_LogError(0, "GLTF topology code: %i\n", cgltf_primitive_type_points);
-            std::abort();
+            return std::nullopt;
         }
 
         // load index buffers
+        if (surface->indices == nullptr)
+        {
+            SDL_LogError(0, "Mesh load error: Surface missing indices: %s\n", meshPath);
+            return std::nullopt;
+        }
+
         void* indexData;
         cgltf_size indexWidth;
         cgltf_size indexCount = cgltf_accessor_unpack_indices(surface->indices, nullptr, 0, 0);
@@ -1096,25 +1138,26 @@ StaticMesh RenderEngine::loadStaticMesh(const char* meshPath)
             newSurface.indexType = VK_INDEX_TYPE_UINT16;
             index16Data.resize(indexCount);
             indexData = static_cast<void*>(index16Data.data());
-            indexWidth = 16;
+            indexWidth = 2;
             break;
         case cgltf_component_type_r_32u:
             newSurface.indexType = VK_INDEX_TYPE_UINT32;
             index32Data.resize(indexCount);
             indexData = static_cast<void*>(index32Data.data());
-            indexWidth = 32;
+            indexWidth = 4;
             break;
         default:
             SDL_LogError(
                 0, "Mesh load error: Mesh primitive invalid index format: %s\n", meshPath);
-            std::abort();
+            return std::nullopt;
         }
 
         cgltf_accessor_unpack_indices(surface->indices, indexData, indexWidth, indexCount);
+        newSurface.indexCount = indexCount;
 
         createBuffer(
             allocator, 
-            indexData, static_cast<VkDeviceSize>(indexCount * indexWidth), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+            indexData, static_cast<VkDeviceSize>(indexCount * indexWidth * 8), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
             newSurface.indexBuffer, newSurface.indexAlloc
         );
 
@@ -1122,9 +1165,69 @@ StaticMesh RenderEngine::loadStaticMesh(const char* meshPath)
         // just load one float3 position and one float3 color (TODO: Load other attributes)
 
         // position
-        const cgltf_accessor* positionAcc = 
-            cgltf_find_accessor(surface, cgltf_attribute_type_position, 0);
+        {
+            const cgltf_accessor* positionAcc =
+                cgltf_find_accessor(surface, cgltf_attribute_type_position, 0);
+
+            if (positionAcc == nullptr || positionAcc->component_type != cgltf_component_type_r_32f
+                || positionAcc->type != cgltf_type_vec3)
+            {
+                SDL_LogError(0, "Mesh load error: Surface position attrib invalid: %s\n", meshPath);
+                return std::nullopt;
+            }
+
+            cgltf_size positionCount = cgltf_accessor_unpack_floats(positionAcc, nullptr, 0);
+
+            positionData.resize(positionCount);
+            cgltf_accessor_unpack_floats(positionAcc, positionData.data(), positionCount);
+        }
+
+        // color
+        {
+            const cgltf_accessor* colorAcc =
+                cgltf_find_accessor(surface, cgltf_attribute_type_color, 0);
+
+            if (colorAcc == nullptr || colorAcc->component_type != cgltf_component_type_r_32f
+                || colorAcc->type != cgltf_type_vec3)
+            {
+                SDL_LogInfo(0, "Mesh load info: Surface color0 attrib invalid: %s\n", meshPath);
+            }
+            else
+            {
+                cgltf_size colorCount = cgltf_accessor_unpack_floats(colorAcc, nullptr, 0);
+
+                colorData.resize(colorCount);
+                cgltf_accessor_unpack_floats(colorAcc, colorData.data(), colorCount);
+            }
+        }
+
+        // interleave
+        size_t vertexCount = positionData.size() / 3;
+        vertexData.resize(vertexCount);
+        for (size_t i = 0; i < vertexCount; i++)
+        {
+            vertexData[i].position = glm::make_vec3(&positionData[3 * i]);
+
+            // if there's no color, use default
+            if (colorData.size() <= 3 * i)
+                vertexData[i].color = glm::vec3{ 0.5f, 0.5f, 0.5f };
+            else
+                vertexData[i].color = glm::make_vec3(&colorData[3 * i]);
+        }
+
+        newSurface.vertexCount = vertexCount;
+        createBuffer(
+            allocator,
+            vertexData.data(), static_cast<VkDeviceSize>(sizeof(vertexData[0]) * vertexCount), 
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            newSurface.vertexBuffer, newSurface.vertexAlloc
+        );
+
+        // add new surface
+        newMesh.surfaces.push_back(newSurface);
     }
+
+    return newMesh;
 }
 
 VkVertexInputBindingDescription Vertex::getInputBindingDescription()
@@ -1144,7 +1247,7 @@ std::array<VkVertexInputAttributeDescription, 2> Vertex::getInputAttributeDescri
     // position attrib
     attribDesc[0].location = 0;
     attribDesc[0].binding = 0;
-    attribDesc[0].format = VK_FORMAT_R32G32_SFLOAT;
+    attribDesc[0].format = VK_FORMAT_R32G32B32_SFLOAT;
     attribDesc[0].offset = offsetof(Vertex, position);
 
     // color attrib

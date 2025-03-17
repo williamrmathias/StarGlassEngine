@@ -23,6 +23,8 @@
 #include <vector>
 #include <array>
 #include <span>
+#include <optional>
+#include <memory>
 
 static const std::array<const char*, 3> deviceExtensions = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME,
@@ -47,9 +49,11 @@ struct MeshSurface
 {
     VkBuffer vertexBuffer;
     VmaAllocation vertexAlloc;
+    uint32_t vertexCount;
 
     VkBuffer indexBuffer;
     VmaAllocation indexAlloc;
+    uint32_t indexCount;
 
     VkPrimitiveTopology topology;
     VkIndexType indexType;
@@ -58,6 +62,8 @@ struct MeshSurface
 struct StaticMesh
 {
     std::vector<MeshSurface> surfaces;
+
+    void cleanup(VmaAllocator allocator);
 };
 
 class RenderEngine
@@ -105,6 +111,8 @@ public:
     VkBuffer indexBuffer;
     VmaAllocation indexBufferAlloc;
 
+    std::optional<StaticMesh> staticMesh;
+
     VkPipelineLayout graphicsPipelineLayout;
     VkPipeline graphicsPipeline;
 
@@ -127,6 +135,6 @@ private:
     FrameData& getCurrentFrameData();
     void incrementFrameData();
     VkShaderModule loadShaderModule(const char* shaderPath);
-    StaticMesh loadStaticMesh(const char* meshPath);
+    std::optional<StaticMesh> loadStaticMesh(const char* meshPath);
 };
 

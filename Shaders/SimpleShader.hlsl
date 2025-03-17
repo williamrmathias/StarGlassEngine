@@ -1,6 +1,6 @@
 struct VertexInput
 {
-    [[vk::location(0)]] float2 position : POSITION0;
+    [[vk::location(0)]] float3 position : POSITION0;
     [[vk::location(1)]] float3 color : COLOR0;
 };
 
@@ -18,7 +18,7 @@ struct PixelOutput
 VertexOutput simpleVS(VertexInput input)
 {
     VertexOutput output;
-    output.position = float4(input.position, 0.f, 1.f);
+    output.position = float4(input.position, 1.f);
     output.color = input.color;
 	return output;
 }
