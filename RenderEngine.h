@@ -66,6 +66,11 @@ struct StaticMesh
     void cleanup(VmaAllocator allocator);
 };
 
+struct PushConstants
+{
+    glm::mat4 mvp; // model view projection matrix;
+};
+
 class RenderEngine
 {
 public:

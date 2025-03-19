@@ -1,3 +1,11 @@
+struct PushConstants
+{
+    float4x4 mvp;
+};
+
+[[vk::push_constant]]
+ConstantBuffer<PushConstants> pc : register(b0);
+
 struct VertexInput
 {
     [[vk::location(0)]] float3 position : POSITION0;
@@ -18,7 +26,7 @@ struct PixelOutput
 VertexOutput simpleVS(VertexInput input)
 {
     VertexOutput output;
-    output.position = float4(input.position, 1.f);
+    output.position = mul(pc.mvp, float4(input.position, 1.f));
     output.color = input.color;
 	return output;
 }

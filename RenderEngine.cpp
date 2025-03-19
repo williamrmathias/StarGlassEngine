@@ -15,6 +15,7 @@
 #include <iostream>
 #include <fstream>
 #include <filesystem>
+#include <chrono>
 
 // cgltf
 #define CGLTF_IMPLEMENTATION
@@ -154,6 +155,36 @@ void RenderEngine::render()
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 
         0, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
+    );
+
+    // update push constants
+    static float angle = 0.f;
+    glm::mat4 model = glm::identity<glm::mat4>();
+    model = glm::translate(model, glm::vec3(0.f, 0.f, 1.f));
+    model = glm::rotate(
+        model, 
+        glm::radians(angle), 
+        glm::vec3(0.f, 1.f, 0.f)
+    );
+    angle += 0.1f;
+
+    glm::mat4 view = 
+        glm::lookAt(glm::vec3(1.f, 2.f, 5.f), glm::vec3(0.f, 0.f, 0.f), glm::vec3(0, 1, 0));
+
+    glm::mat4 projection = glm::perspective(glm::radians(45.f), 1280.f / 720.f, 0.1f, 100.f);
+    projection[1][1] *= -1; // correct gl -> vk
+
+    PushConstants pushConstants{
+        .mvp = projection * view * model
+    };
+
+    vkCmdPushConstants(
+        cmd, 
+        graphicsPipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT,
+        0, 
+        sizeof(PushConstants),
+        &pushConstants
     );
 
     // begin rendering
@@ -325,9 +356,6 @@ void RenderEngine::cleanup()
         vkDestroyImageView(device, view, nullptr);
 
     vkDestroySwapchainKHR(device, swapchain, nullptr); // also destroys swapchain images
-
-    vmaDestroyBuffer(allocator, vertexBuffer, vertexBufferAlloc);
-    vmaDestroyBuffer(allocator, indexBuffer, indexBufferAlloc);
 
     if (staticMesh.has_value())
         staticMesh.value().cleanup(allocator);
@@ -845,15 +873,22 @@ void RenderEngine::initGraphicsPipeline()
     dynamicInfo.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
     dynamicInfo.pDynamicStates = dynamicStates.data();
 
-    // make basic pipeline layout with no descriptors
+    // make push constants
+    VkPushConstantRange pushConstants{
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        .offset = 0,
+        .size = static_cast<uint32_t>(sizeof(PushConstants))
+    };
+
+    // make basic pipeline layout with push constants
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layoutInfo.pNext = nullptr;
     layoutInfo.flags = 0;
     layoutInfo.setLayoutCount = 0;
     layoutInfo.pSetLayouts = nullptr;
-    layoutInfo.pushConstantRangeCount = 0;
-    layoutInfo.pPushConstantRanges = nullptr;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushConstants;
 
     VK_Check(vkCreatePipelineLayout(device, &layoutInfo, nullptr, &graphicsPipelineLayout));
 
