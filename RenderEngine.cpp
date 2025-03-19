@@ -699,33 +699,6 @@ static void createBuffer(
 
 void RenderEngine::initGeometryBuffers()
 {
-    // create vertex buffer
-    std::array<Vertex, 4> vertexData;
-    vertexData[0] = Vertex{ glm::vec3(-0.5f, -0.5f, 0.f), glm::vec3(1.f, 0.f, 0.f) };
-    vertexData[1] = Vertex{ glm::vec3(-0.5f, 0.5f, 0.f), glm::vec3(0.f, 1.f, 0.f) };
-    vertexData[2] = Vertex{ glm::vec3(0.5f, 0.5f, 0.f), glm::vec3(0.f, 0.f, 1.f) };
-    vertexData[3] = Vertex{ glm::vec3(0.5, -0.5f, 0.f), glm::vec3(1.f, 1.f, 1.f) };
-
-    VkDeviceSize vertexDataSize = 
-        static_cast<VkDeviceSize>(sizeof(vertexData[0]) * vertexData.size());
-
-    createBuffer(
-        allocator, 
-        vertexData.data(), vertexDataSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, 
-        vertexBuffer, vertexBufferAlloc
-    );
-
-    // create index buffer
-    std::array<uint16_t, 6> indexData{ 0, 1, 2, 0, 2, 3 };
-
-    VkDeviceSize indexDataSize = static_cast<VkDeviceSize>(sizeof(indexData[0]) * indexData.size());
-
-    createBuffer(
-        allocator,
-        indexData.data(), indexDataSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-        indexBuffer, indexBufferAlloc
-    );
-
     // load cube mesh
     std::filesystem::path boxPath = std::filesystem::current_path() / std::filesystem::path("Assets/Box.glb");
     staticMesh = loadStaticMesh(boxPath.string().c_str());

@@ -105,12 +105,6 @@ public:
     FrameData frames[NUM_FRAMES];
     size_t currentFrameNumber = 0;
 
-    VkBuffer vertexBuffer;
-    VmaAllocation vertexBufferAlloc;
-
-    VkBuffer indexBuffer;
-    VmaAllocation indexBufferAlloc;
-
     std::optional<StaticMesh> staticMesh;
 
     VkPipelineLayout graphicsPipelineLayout;
