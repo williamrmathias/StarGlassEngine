@@ -39,7 +39,7 @@ static const size_t NUM_FRAMES = 2;
 struct Vertex
 {
     glm::vec3 position;
-    glm::vec3 color;
+    glm::vec4 color;
 
     static VkVertexInputBindingDescription getInputBindingDescription();
     static std::array<VkVertexInputAttributeDescription, 2> getInputAttributeDescription();

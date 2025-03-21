@@ -9,13 +9,13 @@ ConstantBuffer<PushConstants> pc : register(b0);
 struct VertexInput
 {
     [[vk::location(0)]] float3 position : POSITION0;
-    [[vk::location(1)]] float3 color : COLOR0;
+    [[vk::location(1)]] float4 color : COLOR0;
 };
 
 struct VertexOutput
 {
     float4 position : SV_Position;
-    [[vk::location(0)]] float3 color : COLOR0;
+    float4 color : COLOR0;
 };
 
 struct PixelOutput
@@ -34,6 +34,6 @@ VertexOutput simpleVS(VertexInput input)
 PixelOutput simplePS(VertexOutput input)
 {
     PixelOutput result;
-    result.color = float4(input.color, 1.f);
+    result.color = input.color;
     return result;
 }
