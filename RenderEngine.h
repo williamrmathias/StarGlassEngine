@@ -23,6 +23,8 @@
 #include <vector>
 #include <array>
 #include <span>
+#include <optional>
+#include <memory>
 
 static const std::array<const char*, 3> deviceExtensions = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME,
@@ -36,11 +38,39 @@ static const size_t NUM_FRAMES = 2;
 
 struct Vertex
 {
-    glm::vec2 position;
-    glm::vec3 color;
+    glm::vec3 position;
+    glm::vec3 normal;
+    glm::vec2 uv;
+    glm::vec4 color;
 
     static VkVertexInputBindingDescription getInputBindingDescription();
-    static std::array<VkVertexInputAttributeDescription, 2> getInputAttributeDescription();
+    static std::array<VkVertexInputAttributeDescription, 4> getInputAttributeDescription();
+};
+
+struct MeshSurface
+{
+    VkBuffer vertexBuffer;
+    VmaAllocation vertexAlloc;
+    uint32_t vertexCount;
+
+    VkBuffer indexBuffer;
+    VmaAllocation indexAlloc;
+    uint32_t indexCount;
+
+    VkPrimitiveTopology topology;
+    VkIndexType indexType;
+};
+
+struct StaticMesh
+{
+    std::vector<MeshSurface> surfaces;
+
+    void cleanup(VmaAllocator allocator);
+};
+
+struct PushConstants
+{
+    glm::mat4 mvp; // model view projection matrix;
 };
 
 class RenderEngine
@@ -82,11 +112,7 @@ public:
     FrameData frames[NUM_FRAMES];
     size_t currentFrameNumber = 0;
 
-    VkBuffer vertexBuffer;
-    VmaAllocation vertexBufferAlloc;
-
-    VkBuffer indexBuffer;
-    VmaAllocation indexBufferAlloc;
+    std::optional<StaticMesh> staticMesh;
 
     VkPipelineLayout graphicsPipelineLayout;
     VkPipeline graphicsPipeline;
@@ -110,5 +136,6 @@ private:
     FrameData& getCurrentFrameData();
     void incrementFrameData();
     VkShaderModule loadShaderModule(const char* shaderPath);
+    std::optional<StaticMesh> loadStaticMesh(const char* meshPath);
 };
 

@@ -7,13 +7,19 @@
 #define VMA_IMPLEMENTATION
 #include <vma/vk_mem_alloc.h>
 
+// glm
+#include <glm/gtc/type_ptr.hpp>
+
 // stl
 #include <algorithm>
 #include <iostream>
 #include <fstream>
 #include <filesystem>
-#include <utility>
+#include <chrono>
 
+// cgltf
+#define CGLTF_IMPLEMENTATION
+#include <cgltf.h>
 
 static inline void VK_Check(VkResult result)
 {
@@ -151,6 +157,36 @@ void RenderEngine::render()
         0, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
     );
 
+    // update push constants
+    static float angle = 0.f;
+    glm::mat4 model = glm::identity<glm::mat4>();
+    model = glm::translate(model, glm::vec3(0.f, 0.f, 1.f));
+    model = glm::rotate(
+        model, 
+        glm::radians(angle), 
+        glm::vec3(0.f, 1.f, 0.f)
+    );
+    angle += 0.1f;
+
+    glm::mat4 view = 
+        glm::lookAt(glm::vec3(1.f, 2.f, 5.f), glm::vec3(0.f, 0.f, 0.f), glm::vec3(0, 1, 0));
+
+    glm::mat4 projection = glm::perspective(glm::radians(45.f), 1280.f / 720.f, 0.1f, 100.f);
+    projection[1][1] *= -1; // correct gl -> vk
+
+    PushConstants pushConstants{
+        .mvp = projection * view * model
+    };
+
+    vkCmdPushConstants(
+        cmd, 
+        graphicsPipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT,
+        0, 
+        sizeof(PushConstants),
+        &pushConstants
+    );
+
     // begin rendering
     VkRenderingAttachmentInfo colorAttachInfo{};
     colorAttachInfo.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -196,15 +232,20 @@ void RenderEngine::render()
     // bind pipeline
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 
-    // bind geometry buffers
-    VkDeviceSize vertexBufferOffset{ 0 };
-    vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer, &vertexBufferOffset);
+    // draw static mesh
+    if (staticMesh.has_value())
+    {
+        for (MeshSurface& surface : staticMesh.value().surfaces)
+        {
+            VkDeviceSize vertexBufferOffset{ 0 };
+            vkCmdBindVertexBuffers(cmd, 0, 1, &surface.vertexBuffer, &vertexBufferOffset);
 
-    VkDeviceSize indexBufferOffset{ 0 };
-    vkCmdBindIndexBuffer(cmd, indexBuffer, indexBufferOffset, VK_INDEX_TYPE_UINT16);
+            VkDeviceSize indexBufferOffset{ 0 };
+            vkCmdBindIndexBuffer(cmd, surface.indexBuffer, indexBufferOffset, surface.indexType);
 
-    // draw
-    vkCmdDrawIndexed(cmd, 6, 1, 0, 0, 0);
+            vkCmdDrawIndexed(cmd, surface.indexCount, 1, 0, 0, 0);
+        }
+    }
 
     // end rendering
     vkCmdEndRendering(cmd);
@@ -283,6 +324,15 @@ void RenderEngine::FrameData::cleanup(VkDevice device)
     vkDestroyCommandPool(device, commandPool, nullptr);
 }
 
+void StaticMesh::cleanup(VmaAllocator allocator)
+{
+    for (MeshSurface& surface : surfaces)
+    {
+        vmaDestroyBuffer(allocator, surface.indexBuffer, surface.indexAlloc);
+        vmaDestroyBuffer(allocator, surface.vertexBuffer, surface.vertexAlloc);
+    }
+}
+
 void RenderEngine::cleanup()
 {
     vkDeviceWaitIdle(device);
@@ -298,8 +348,8 @@ void RenderEngine::cleanup()
 
     vkDestroySwapchainKHR(device, swapchain, nullptr); // also destroys swapchain images
 
-    vmaDestroyBuffer(allocator, vertexBuffer, vertexBufferAlloc);
-    vmaDestroyBuffer(allocator, indexBuffer, indexBufferAlloc);
+    if (staticMesh.has_value())
+        staticMesh.value().cleanup(allocator);
 
     vmaDestroyAllocator(allocator);
 
@@ -668,32 +718,9 @@ static void createBuffer(
 
 void RenderEngine::initGeometryBuffers()
 {
-    // create vertex buffer
-    std::array<Vertex, 4> vertexData;
-    vertexData[0] = Vertex{ glm::vec2(-0.5f, -0.5f), glm::vec3(1.f, 0.f, 0.f) };
-    vertexData[1] = Vertex{ glm::vec2(-0.5f, 0.5f), glm::vec3(0.f, 1.f, 0.f) };
-    vertexData[2] = Vertex{ glm::vec2(0.5f, 0.5f), glm::vec3(0.f, 0.f, 1.f) };
-    vertexData[3] = Vertex{ glm::vec2(0.5, -0.5f), glm::vec3(1.f, 1.f, 1.f) };
-
-    VkDeviceSize vertexDataSize = 
-        static_cast<VkDeviceSize>(sizeof(vertexData[0]) * vertexData.size());
-
-    createBuffer(
-        allocator, 
-        vertexData.data(), vertexDataSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, 
-        vertexBuffer, vertexBufferAlloc
-    );
-
-    // create index buffer
-    std::array<uint16_t, 6> indexData{ 0, 1, 2, 0, 2, 3 };
-
-    VkDeviceSize indexDataSize = static_cast<VkDeviceSize>(sizeof(indexData[0]) * indexData.size());
-
-    createBuffer(
-        allocator,
-        indexData.data(), indexDataSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-        indexBuffer, indexBufferAlloc
-    );
+    // load cube mesh
+    std::filesystem::path boxPath = std::filesystem::current_path() / std::filesystem::path("Assets/Box.glb");
+    staticMesh = loadStaticMesh(boxPath.string().c_str());
 }
 
 void RenderEngine::initGraphicsPipeline()
@@ -723,7 +750,7 @@ void RenderEngine::initGraphicsPipeline()
 
     // create vertex input
     VkVertexInputBindingDescription vertexBindingDesc = Vertex::getInputBindingDescription();
-    std::array<VkVertexInputAttributeDescription, 2> vertexAttribDesc = Vertex::getInputAttributeDescription();
+    std::array<VkVertexInputAttributeDescription, 4> vertexAttribDesc = Vertex::getInputAttributeDescription();
 
     VkPipelineVertexInputStateCreateInfo vertexInfo{};
     vertexInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -837,15 +864,22 @@ void RenderEngine::initGraphicsPipeline()
     dynamicInfo.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
     dynamicInfo.pDynamicStates = dynamicStates.data();
 
-    // make basic pipeline layout with no descriptors
+    // make push constants
+    VkPushConstantRange pushConstants{
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        .offset = 0,
+        .size = static_cast<uint32_t>(sizeof(PushConstants))
+    };
+
+    // make basic pipeline layout with push constants
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layoutInfo.pNext = nullptr;
     layoutInfo.flags = 0;
     layoutInfo.setLayoutCount = 0;
     layoutInfo.pSetLayouts = nullptr;
-    layoutInfo.pushConstantRangeCount = 0;
-    layoutInfo.pPushConstantRanges = nullptr;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushConstants;
 
     VK_Check(vkCreatePipelineLayout(device, &layoutInfo, nullptr, &graphicsPipelineLayout));
 
@@ -1000,6 +1034,231 @@ VkShaderModule RenderEngine::loadShaderModule(const char* shaderPath)
     return resultShader;
 }
 
+struct ScopedGLTFData
+{
+    cgltf_data* data;
+
+    cgltf_data* operator->() const { return data; }
+
+    ~ScopedGLTFData()
+    {
+        cgltf_free(data);
+    }
+};
+
+std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
+{
+    cgltf_options options{}; // default loading options
+    ScopedGLTFData gltfData;
+
+    cgltf_result result = cgltf_parse_file(&options, meshPath, &gltfData.data);
+    if (result != cgltf_result_success || gltfData.data == nullptr)
+    {
+        SDL_LogError(0, "Mesh load error: Could not read file data: %s\n", meshPath);
+        SDL_LogError(0, "GLTF load error code: %i\n", result);
+        return std::nullopt;
+    }
+
+    result = cgltf_load_buffers(&options, gltfData.data, meshPath);
+    if (result != cgltf_result_success)
+    {
+        SDL_LogError(0, "Mesh load error: Could not read buffer data: %s\n", meshPath);
+        SDL_LogError(0, "GLTF load error code: %i\n", result);
+        return std::nullopt;
+    }
+
+    if (gltfData->meshes_count < 1)
+    {
+        SDL_LogError(0, "Mesh load error: Read file contains no meshes: %s\n", meshPath);
+        return std::nullopt;
+    }
+
+    // load in single mesh
+    cgltf_mesh* gltfMesh = &gltfData->meshes[0];
+
+    StaticMesh newMesh;
+    newMesh.surfaces.reserve(gltfMesh->primitives_count);
+
+    // sratch buffer data
+    std::vector<uint8_t> indexData;
+
+    std::vector<float> positionData;
+    std::vector<float> normalData;
+    std::vector<float> uvData;
+    std::vector<float> colorData;
+
+    std::vector<Vertex> vertexData;
+
+    for (cgltf_size i = 0; i < gltfMesh->primitives_count; i++)
+    {
+        MeshSurface newSurface;
+        cgltf_primitive* surface = &gltfMesh->primitives[i];
+
+        // get primative topology
+        // TODO: Implement rendering all topology types
+        switch (surface->type) 
+        {
+        case cgltf_primitive_type_triangles:
+            newSurface.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            break;
+        default:
+            SDL_LogError(
+                0, "Mesh load error: Mesh primitive contains invalid topology: %s\n", meshPath);
+            SDL_LogError(0, "GLTF topology code: %i\n", surface->type);
+            return std::nullopt;
+        }
+
+        // load index buffer
+        // TODO: Support non index geometry
+        {
+            if (surface->indices == nullptr)
+            {
+                SDL_LogError(0, "Mesh load error: Surface missing indices: %s\n", meshPath);
+                return std::nullopt;
+            }
+
+            cgltf_size outComponentSize = cgltf_component_size(surface->indices->component_type);
+            cgltf_size indexCount = cgltf_accessor_unpack_indices(surface->indices, nullptr, 0, 0);
+            indexData.resize(outComponentSize * indexCount);
+
+            // base vulkan only supports 16u and 32u indices
+            switch (surface->indices->component_type)
+            {
+            case cgltf_component_type_r_16u:
+                newSurface.indexType = VK_INDEX_TYPE_UINT16;
+                break;
+            case cgltf_component_type_r_32u:
+                newSurface.indexType = VK_INDEX_TYPE_UINT32;
+                break;
+            default:
+                SDL_LogError(
+                    0, "Mesh load error: Mesh primitive contains invalid index format: %s\n", meshPath);
+                SDL_LogError(0, "GLTF index code: %i\n", surface->indices->component_type);
+                return std::nullopt;
+            }
+
+            cgltf_accessor_unpack_indices(surface->indices, indexData.data(), outComponentSize, indexCount);
+
+            newSurface.indexCount = indexCount;
+            // create and upload gpu buffer
+            createBuffer(
+                allocator, indexData.data(), static_cast<VkDeviceSize>(outComponentSize * indexCount),
+                VK_BUFFER_USAGE_INDEX_BUFFER_BIT, 
+                newSurface.indexBuffer, newSurface.indexAlloc
+            );
+        }
+
+        // load vertex buffer
+        {
+            // position
+            {
+                const cgltf_accessor* positionAcc =
+                    cgltf_find_accessor(surface, cgltf_attribute_type_position, 0);
+
+                if (positionAcc == nullptr)
+                {
+                    SDL_LogError(0, "Mesh load error: Surface position attrib invalid: %s\n", meshPath);
+                    return std::nullopt;
+                }
+
+                cgltf_size positionCount = cgltf_accessor_unpack_floats(positionAcc, nullptr, 0);
+
+                positionData.resize(positionCount);
+                cgltf_accessor_unpack_floats(positionAcc, positionData.data(), positionCount);
+            }
+
+            // normal
+            bool hasNormal = false;
+            {
+                const cgltf_accessor* normalAcc =
+                    cgltf_find_accessor(surface, cgltf_attribute_type_normal, 0);
+
+                if (normalAcc != nullptr)
+                {
+                    hasNormal = true;
+                    cgltf_size normalCount = cgltf_accessor_unpack_floats(normalAcc, nullptr, 0);
+
+                    normalData.resize(normalCount);
+                    cgltf_accessor_unpack_floats(normalAcc, normalData.data(), normalCount);
+                }
+            }
+
+            // uv
+            bool hasUv = false;
+            {
+                const cgltf_accessor* uvAcc =
+                    cgltf_find_accessor(surface, cgltf_attribute_type_texcoord, 0);
+
+                if (uvAcc != nullptr)
+                {
+                    hasUv = true;
+                    cgltf_size uvCount = cgltf_accessor_unpack_floats(uvAcc, nullptr, 0);
+
+                    uvData.resize(uvCount);
+                    cgltf_accessor_unpack_floats(uvAcc, uvData.data(), uvCount);
+                }
+            }
+
+            // color
+            cgltf_size colorChannels = 0;
+            {
+                const cgltf_accessor* colorAcc =
+                    cgltf_find_accessor(surface, cgltf_attribute_type_color, 0);
+
+                if (colorAcc != nullptr)
+                {
+                    colorChannels = cgltf_num_components(colorAcc->type);
+                    cgltf_size colorCount = cgltf_accessor_unpack_floats(colorAcc, nullptr, 0);
+
+                    colorData.resize(colorCount);
+                    cgltf_accessor_unpack_floats(colorAcc, colorData.data(), colorCount);
+                }
+            }
+
+            // assemble attribs
+            size_t vertexCount = positionData.size() / 3;
+            {
+                vertexData.resize(vertexCount);
+                for (size_t i = 0; i < vertexCount; i++)
+                {
+                    vertexData[i].position = glm::make_vec3(&positionData[3 * i]);
+
+                    if (hasNormal)
+                        vertexData[i].normal = glm::make_vec3(&normalData[3 * i]);
+                    else
+                        vertexData[i].normal = glm::vec3{ 0.f, 0.f, 1.f };
+
+                    if (hasUv)
+                        vertexData[i].uv = glm::make_vec2(&uvData[2 * i]);
+                    else
+                        vertexData[i].uv = glm::vec2{ 0.f, 0.f };
+
+                    if (colorChannels == 4)
+                        vertexData[i].color = glm::make_vec4(&colorData[4 * i]);
+                    else if (colorChannels == 3)
+                        vertexData[i].color = glm::vec4{ glm::make_vec3(&colorData[3 * i]), 1.f };
+                    else
+                        vertexData[i].color = glm::vec4{ 0.5f, 0.5f, 0.5f, 1.f };
+                }
+            }
+
+            newSurface.vertexCount = vertexCount;
+            // create and upload gpu buffer
+            createBuffer(
+                allocator, vertexData.data(),
+                static_cast<VkDeviceSize>(sizeof(vertexData[0]) * vertexCount),
+                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                newSurface.vertexBuffer, newSurface.vertexAlloc
+            );
+        }
+
+        // add new surface
+        newMesh.surfaces.push_back(newSurface);
+    }
+
+    return newMesh;
+}
+
 VkVertexInputBindingDescription Vertex::getInputBindingDescription()
 {
     VkVertexInputBindingDescription bindingDesc{};
@@ -1010,21 +1269,33 @@ VkVertexInputBindingDescription Vertex::getInputBindingDescription()
     return bindingDesc;
 }
 
-std::array<VkVertexInputAttributeDescription, 2> Vertex::getInputAttributeDescription()
+std::array<VkVertexInputAttributeDescription, 4> Vertex::getInputAttributeDescription()
 {
-    std::array<VkVertexInputAttributeDescription, 2> attribDesc;
+    std::array<VkVertexInputAttributeDescription, 4> attribDesc;
 
     // position attrib
     attribDesc[0].location = 0;
     attribDesc[0].binding = 0;
-    attribDesc[0].format = VK_FORMAT_R32G32_SFLOAT;
+    attribDesc[0].format = VK_FORMAT_R32G32B32_SFLOAT;
     attribDesc[0].offset = offsetof(Vertex, position);
 
-    // color attrib
+    // normal attrib
     attribDesc[1].location = 1;
     attribDesc[1].binding = 0;
     attribDesc[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attribDesc[1].offset = offsetof(Vertex, color);
+    attribDesc[1].offset = offsetof(Vertex, normal);
+
+    // uv attrib
+    attribDesc[2].location = 2;
+    attribDesc[2].binding = 0;
+    attribDesc[2].format = VK_FORMAT_R32G32_SFLOAT;
+    attribDesc[2].offset = offsetof(Vertex, uv);
+
+    // color attrib
+    attribDesc[3].location = 3;
+    attribDesc[3].binding = 0;
+    attribDesc[3].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attribDesc[3].offset = offsetof(Vertex, color);
 
     return attribDesc;
 }
