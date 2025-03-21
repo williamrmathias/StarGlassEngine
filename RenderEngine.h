@@ -39,10 +39,12 @@ static const size_t NUM_FRAMES = 2;
 struct Vertex
 {
     glm::vec3 position;
+    glm::vec3 normal;
+    glm::vec2 uv;
     glm::vec4 color;
 
     static VkVertexInputBindingDescription getInputBindingDescription();
-    static std::array<VkVertexInputAttributeDescription, 2> getInputAttributeDescription();
+    static std::array<VkVertexInputAttributeDescription, 4> getInputAttributeDescription();
 };
 
 struct MeshSurface

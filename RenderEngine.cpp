@@ -750,7 +750,7 @@ void RenderEngine::initGraphicsPipeline()
 
     // create vertex input
     VkVertexInputBindingDescription vertexBindingDesc = Vertex::getInputBindingDescription();
-    std::array<VkVertexInputAttributeDescription, 2> vertexAttribDesc = Vertex::getInputAttributeDescription();
+    std::array<VkVertexInputAttributeDescription, 4> vertexAttribDesc = Vertex::getInputAttributeDescription();
 
     VkPipelineVertexInputStateCreateInfo vertexInfo{};
     vertexInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -1080,10 +1080,11 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
     newMesh.surfaces.reserve(gltfMesh->primitives_count);
 
     // sratch buffer data
-    std::vector<uint16_t> index16Data;
-    std::vector<uint32_t> index32Data;
+    std::vector<uint8_t> indexData;
 
     std::vector<float> positionData;
+    std::vector<float> normalData;
+    std::vector<float> uvData;
     std::vector<float> colorData;
 
     std::vector<Vertex> vertexData;
@@ -1103,7 +1104,7 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
         default:
             SDL_LogError(
                 0, "Mesh load error: Mesh primitive contains invalid topology: %s\n", meshPath);
-            SDL_LogError(0, "GLTF topology code: %i\n", cgltf_primitive_type_points);
+            SDL_LogError(0, "GLTF topology code: %i\n", surface->type);
             return std::nullopt;
         }
 
@@ -1116,36 +1117,32 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
                 return std::nullopt;
             }
 
-            void* indexData;
             cgltf_size outComponentSize = cgltf_component_size(surface->indices->component_type);
             cgltf_size indexCount = cgltf_accessor_unpack_indices(surface->indices, nullptr, 0, 0);
+            indexData.resize(outComponentSize * indexCount);
 
             // base vulkan only supports 16u and 32u indices
             switch (surface->indices->component_type)
             {
             case cgltf_component_type_r_16u:
                 newSurface.indexType = VK_INDEX_TYPE_UINT16;
-                index16Data.resize(indexCount);
-                indexData = static_cast<void*>(index16Data.data());
                 break;
             case cgltf_component_type_r_32u:
                 newSurface.indexType = VK_INDEX_TYPE_UINT32;
-                index32Data.resize(indexCount);
-                indexData = static_cast<void*>(index32Data.data());
                 break;
             default:
                 SDL_LogError(
-                    0, "Mesh load error: Mesh primitive contains invalid topology: %s\n", meshPath);
-                SDL_LogError(0, "GLTF topology code: %i\n", cgltf_primitive_type_points);
+                    0, "Mesh load error: Mesh primitive contains invalid index format: %s\n", meshPath);
+                SDL_LogError(0, "GLTF index code: %i\n", surface->indices->component_type);
                 return std::nullopt;
             }
 
-            cgltf_accessor_unpack_indices(surface->indices, indexData, outComponentSize, indexCount);
+            cgltf_accessor_unpack_indices(surface->indices, indexData.data(), outComponentSize, indexCount);
 
             newSurface.indexCount = indexCount;
             // create and upload gpu buffer
             createBuffer(
-                allocator, indexData, static_cast<VkDeviceSize>(outComponentSize * indexCount),
+                allocator, indexData.data(), static_cast<VkDeviceSize>(outComponentSize * indexCount),
                 VK_BUFFER_USAGE_INDEX_BUFFER_BIT, 
                 newSurface.indexBuffer, newSurface.indexAlloc
             );
@@ -1168,6 +1165,38 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
 
                 positionData.resize(positionCount);
                 cgltf_accessor_unpack_floats(positionAcc, positionData.data(), positionCount);
+            }
+
+            // normal
+            bool hasNormal = false;
+            {
+                const cgltf_accessor* normalAcc =
+                    cgltf_find_accessor(surface, cgltf_attribute_type_normal, 0);
+
+                if (normalAcc != nullptr)
+                {
+                    hasNormal = true;
+                    cgltf_size normalCount = cgltf_accessor_unpack_floats(normalAcc, nullptr, 0);
+
+                    normalData.resize(normalCount);
+                    cgltf_accessor_unpack_floats(normalAcc, normalData.data(), normalCount);
+                }
+            }
+
+            // uv
+            bool hasUv = false;
+            {
+                const cgltf_accessor* uvAcc =
+                    cgltf_find_accessor(surface, cgltf_attribute_type_texcoord, 0);
+
+                if (uvAcc != nullptr)
+                {
+                    hasUv = true;
+                    cgltf_size uvCount = cgltf_accessor_unpack_floats(uvAcc, nullptr, 0);
+
+                    uvData.resize(uvCount);
+                    cgltf_accessor_unpack_floats(uvAcc, uvData.data(), uvCount);
+                }
             }
 
             // color
@@ -1194,6 +1223,16 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
                 {
                     vertexData[i].position = glm::make_vec3(&positionData[3 * i]);
 
+                    if (hasNormal)
+                        vertexData[i].normal = glm::make_vec3(&normalData[3 * i]);
+                    else
+                        vertexData[i].normal = glm::vec3{ 0.f, 0.f, 1.f };
+
+                    if (hasUv)
+                        vertexData[i].uv = glm::make_vec2(&uvData[2 * i]);
+                    else
+                        vertexData[i].uv = glm::vec2{ 0.f, 0.f };
+
                     if (colorChannels == 4)
                         vertexData[i].color = glm::make_vec4(&colorData[4 * i]);
                     else if (colorChannels == 3)
@@ -1207,7 +1246,7 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
             // create and upload gpu buffer
             createBuffer(
                 allocator, vertexData.data(),
-                static_cast<VkDeviceSize>(sizeof(vertexData[0])* vertexCount),
+                static_cast<VkDeviceSize>(sizeof(vertexData[0]) * vertexCount),
                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 newSurface.vertexBuffer, newSurface.vertexAlloc
             );
@@ -1230,9 +1269,9 @@ VkVertexInputBindingDescription Vertex::getInputBindingDescription()
     return bindingDesc;
 }
 
-std::array<VkVertexInputAttributeDescription, 2> Vertex::getInputAttributeDescription()
+std::array<VkVertexInputAttributeDescription, 4> Vertex::getInputAttributeDescription()
 {
-    std::array<VkVertexInputAttributeDescription, 2> attribDesc;
+    std::array<VkVertexInputAttributeDescription, 4> attribDesc;
 
     // position attrib
     attribDesc[0].location = 0;
@@ -1240,11 +1279,23 @@ std::array<VkVertexInputAttributeDescription, 2> Vertex::getInputAttributeDescri
     attribDesc[0].format = VK_FORMAT_R32G32B32_SFLOAT;
     attribDesc[0].offset = offsetof(Vertex, position);
 
-    // color attrib
+    // normal attrib
     attribDesc[1].location = 1;
     attribDesc[1].binding = 0;
-    attribDesc[1].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    attribDesc[1].offset = offsetof(Vertex, color);
+    attribDesc[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attribDesc[1].offset = offsetof(Vertex, normal);
+
+    // uv attrib
+    attribDesc[2].location = 2;
+    attribDesc[2].binding = 0;
+    attribDesc[2].format = VK_FORMAT_R32G32_SFLOAT;
+    attribDesc[2].offset = offsetof(Vertex, uv);
+
+    // color attrib
+    attribDesc[3].location = 3;
+    attribDesc[3].binding = 0;
+    attribDesc[3].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attribDesc[3].offset = offsetof(Vertex, color);
 
     return attribDesc;
 }
