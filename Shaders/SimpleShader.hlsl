@@ -1,10 +1,18 @@
+struct GlobalSceneData
+{
+    float4x4 viewproj;
+};
+
+[[vk::binding(0, 0)]]
+ConstantBuffer<GlobalSceneData> globalSceneData : register(b0);
+
 struct PushConstants
 {
-    float4x4 mvp;
+    float4x4 model;
 };
 
 [[vk::push_constant]]
-ConstantBuffer<PushConstants> pc : register(b0);
+ConstantBuffer<PushConstants> pushConstants : register(b1);
 
 struct VertexInput
 {
@@ -28,7 +36,8 @@ struct PixelOutput
 VertexOutput simpleVS(VertexInput input)
 {
     VertexOutput output;
-    output.position = mul(pc.mvp, float4(input.position, 1.f));
+    float4x4 mvp = mul(globalSceneData.viewproj, pushConstants.model);
+    output.position = mul(mvp, float4(input.position, 1.f));
     output.color = input.color;
 	return output;
 }

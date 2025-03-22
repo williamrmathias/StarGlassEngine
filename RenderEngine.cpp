@@ -74,6 +74,8 @@ void RenderEngine::init(SDL_Window* window)
 
     initDepth();
 
+    initDescriptorPool();
+
     initFrameData();
 
     initGeometryBuffers();
@@ -166,11 +168,11 @@ void RenderEngine::render()
         cmd, depthImage,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
-        0, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        0, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
         VK_IMAGE_ASPECT_DEPTH_BIT
     );
 
-    // update push constants
+    // update constants
     static float angle = 0.f;
     glm::mat4 model = glm::identity<glm::mat4>();
     model = glm::translate(model, glm::vec3(0.f, 0.f, 1.f));
@@ -179,6 +181,20 @@ void RenderEngine::render()
         glm::radians(angle), 
         glm::vec3(0.f, 1.f, 0.f)
     );
+
+    PushConstants pushConstants{
+        .model = model
+    };
+
+    vkCmdPushConstants(
+        cmd,
+        graphicsPipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT,
+        0,
+        sizeof(PushConstants),
+        &pushConstants
+    );
+
     angle += 0.1f;
 
     glm::mat4 view = 
@@ -187,17 +203,17 @@ void RenderEngine::render()
     glm::mat4 projection = glm::perspective(glm::radians(45.f), 1280.f / 720.f, 0.1f, 100.f);
     projection[1][1] *= -1; // correct gl -> vk
 
-    PushConstants pushConstants{
-        .mvp = projection * view * model
-    };
+    globalSceneData.viewproj = projection * view;
 
-    vkCmdPushConstants(
-        cmd, 
-        graphicsPipelineLayout,
-        VK_SHADER_STAGE_VERTEX_BIT,
-        0, 
-        sizeof(PushConstants),
-        &pushConstants
+    // copy to uniform buffer
+    vmaCopyMemoryToAllocation(
+        allocator, &globalSceneData, frame.uniformAlloc, 
+        0, static_cast<VkDeviceSize>(sizeof(globalSceneData))
+    );
+
+    vkCmdBindDescriptorSets(
+        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout, 0, 1, &frame.descriptorSet, 
+        0, nullptr
     );
 
     // begin rendering
@@ -342,7 +358,7 @@ void RenderEngine::render()
     incrementFrameData();
 }
 
-void RenderEngine::FrameData::cleanup(VkDevice device)
+void RenderEngine::FrameData::cleanup(VkDevice device, VmaAllocator allocator)
 {
     vkDestroySemaphore(device, swapchainSemaphore, nullptr);
     vkDestroySemaphore(device, renderSemaphore, nullptr);
@@ -350,6 +366,8 @@ void RenderEngine::FrameData::cleanup(VkDevice device)
     vkDestroyFence(device, renderFence, nullptr);
 
     vkDestroyCommandPool(device, commandPool, nullptr);
+
+    vmaDestroyBuffer(allocator, uniformBuffer, uniformAlloc);
 }
 
 void StaticMesh::cleanup(VmaAllocator allocator)
@@ -366,7 +384,10 @@ void RenderEngine::cleanup()
     vkDeviceWaitIdle(device);
 
     for (FrameData& frame : frames)
-        frame.cleanup(device);
+        frame.cleanup(device, allocator);
+
+    vkDestroyDescriptorPool(device, globalDescriptorPool, nullptr);
+    vkDestroyDescriptorSetLayout(device, globalSceneDataLayout, nullptr);
 
     vkDestroyPipelineLayout(device, graphicsPipelineLayout, nullptr);
     vkDestroyPipeline(device, graphicsPipeline, nullptr);
@@ -675,6 +696,16 @@ void RenderEngine::initSwapchain()
 
 void RenderEngine::initDepth()
 {
+    // get depth format
+    VkFormatProperties formatProps;
+    vkGetPhysicalDeviceFormatProperties(physicalDevice, depthFormat, &formatProps);
+    bool supportsFormat = formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    if (!supportsFormat)
+    {
+        SDL_LogError(0, "Depth image error: format not supported by device\n");
+        std::abort();
+    }
+
     // create image and allocation
     VkImageCreateInfo imageInfo{
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
@@ -728,6 +759,80 @@ void RenderEngine::initDepth()
     VK_Check(vkCreateImageView(device, &viewInfo, nullptr, &depthView));
 }
 
+void RenderEngine::initDescriptorPool()
+{
+    // make global scene descriptor layout
+    VkDescriptorSetLayoutBinding binding{
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        .pImmutableSamplers = nullptr
+    };
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .bindingCount = 1,
+        .pBindings = &binding
+    };
+
+    VK_Check(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &globalSceneDataLayout));
+
+    // make descriptor pool
+    VkDescriptorPoolSize poolSize{
+        .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = static_cast<uint32_t>(NUM_FRAMES)
+    };
+
+    VkDescriptorPoolCreateInfo poolInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .maxSets = static_cast<uint32_t>(NUM_FRAMES),
+        .poolSizeCount = 1,
+        .pPoolSizes = &poolSize
+    };
+
+    VK_Check(vkCreateDescriptorPool(device, &poolInfo, nullptr, &globalDescriptorPool));
+}
+
+/*
+* creates, allocates, and copies data for a Buffer object
+*/
+static void createBuffer(
+    VmaAllocator allocator,
+    void* data, VkDeviceSize dataSize, VkBufferUsageFlags usage,
+    VkBuffer& buffer, VmaAllocation& allocation)
+{
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.pNext = nullptr;
+    bufferInfo.flags = 0;
+    bufferInfo.size = dataSize;
+    bufferInfo.usage = usage;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // exclusive to graphics queue
+    bufferInfo.queueFamilyIndexCount = 0;
+    bufferInfo.pQueueFamilyIndices = nullptr;
+
+    VmaAllocationCreateInfo allocInfo{};
+    allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+    allocInfo.requiredFlags = 0;
+    allocInfo.preferredFlags = 0;
+    allocInfo.memoryTypeBits = 0;
+    allocInfo.pool = VMA_NULL;
+    allocInfo.pUserData = nullptr;
+    allocInfo.priority = 0.f;
+
+    VK_Check(vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &buffer, &allocation, nullptr));
+
+    // if input data is provided, copy it to the allocation
+    if (data)
+        vmaCopyMemoryToAllocation(allocator, data, allocation, 0, dataSize);
+}
+
 void RenderEngine::initFrameData()
 {
     // create command pools
@@ -768,38 +873,56 @@ void RenderEngine::initFrameData()
         VK_Check(vkCreateSemaphore(device, &semInfo, nullptr, &frames[i].renderSemaphore));
         VK_Check(vkCreateFence(device, &fenceInfo, nullptr, &frames[i].renderFence));
     }
-}
 
-/*
-* creates, allocates, and copies data for a Buffer object
-*/
-static void createBuffer(
-    VmaAllocator allocator,
-    void* data, VkDeviceSize dataSize, VkBufferUsageFlags usage,
-    VkBuffer& buffer, VmaAllocation& allocation)
-{
-    VkBufferCreateInfo bufferInfo{};
-    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.pNext = nullptr;
-    bufferInfo.flags = 0;
-    bufferInfo.size = dataSize;
-    bufferInfo.usage = usage;
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // exclusive to graphics queue
-    bufferInfo.queueFamilyIndexCount = 0;
-    bufferInfo.pQueueFamilyIndices = nullptr;
+    // create uniform buffers + descriptor sets
+    for (size_t i = 0; i < NUM_FRAMES; i++)
+    {
+        createBuffer(
+            allocator, nullptr, sizeof(globalSceneData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            frames[i].uniformBuffer, frames[i].uniformAlloc
+        );
+    }
 
-    VmaAllocationCreateInfo allocInfo{};
-    allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
-    allocInfo.requiredFlags = 0;
-    allocInfo.preferredFlags = 0;
-    allocInfo.memoryTypeBits = 0;
-    allocInfo.pool = VMA_NULL;
-    allocInfo.pUserData = nullptr;
-    allocInfo.priority = 0.f;
+    std::array<VkDescriptorSet, NUM_FRAMES> descriptorSets;
+    std::array<VkDescriptorSetLayout, NUM_FRAMES> layouts;
+    layouts.fill(globalSceneDataLayout);
 
-    VK_Check(vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &buffer, &allocation, nullptr));
-    vmaCopyMemoryToAllocation(allocator, data, allocation, 0, dataSize);
+    VkDescriptorSetAllocateInfo descriptorInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .pNext = nullptr,
+        .descriptorPool = globalDescriptorPool,
+        .descriptorSetCount = static_cast<uint32_t>(NUM_FRAMES),
+        .pSetLayouts = layouts.data()
+    };
+
+    VK_Check(vkAllocateDescriptorSets(device, &descriptorInfo, descriptorSets.data()));
+    for (size_t i = 0; i < NUM_FRAMES; i++)
+        frames[i].descriptorSet = descriptorSets[i];
+
+    // update descriptor sets
+    for (size_t i = 0; i < NUM_FRAMES; i++)
+    {
+        VkDescriptorBufferInfo bufferInfo{
+            .buffer = frames[i].uniformBuffer,
+            .offset = 0,
+            .range = VK_WHOLE_SIZE
+        };
+
+        VkWriteDescriptorSet write{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = nullptr,
+            .dstSet = frames[i].descriptorSet,
+            .dstBinding = 0,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .pImageInfo = nullptr,
+            .pBufferInfo = &bufferInfo,
+            .pTexelBufferView = nullptr
+        };
+
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    }
 }
 
 void RenderEngine::initGeometryBuffers()
@@ -962,8 +1085,8 @@ void RenderEngine::initGraphicsPipeline()
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layoutInfo.pNext = nullptr;
     layoutInfo.flags = 0;
-    layoutInfo.setLayoutCount = 0;
-    layoutInfo.pSetLayouts = nullptr;
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &globalSceneDataLayout;
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &pushConstants;
 
@@ -1225,7 +1348,7 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
 
             cgltf_accessor_unpack_indices(surface->indices, indexData.data(), outComponentSize, indexCount);
 
-            newSurface.indexCount = indexCount;
+            newSurface.indexCount = static_cast<uint32_t>(indexCount);
             // create and upload gpu buffer
             createBuffer(
                 allocator, indexData.data(), static_cast<VkDeviceSize>(outComponentSize * indexCount),
@@ -1328,7 +1451,7 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
                 }
             }
 
-            newSurface.vertexCount = vertexCount;
+            newSurface.vertexCount = static_cast<uint32_t>(vertexCount);
             // create and upload gpu buffer
             createBuffer(
                 allocator, vertexData.data(),
