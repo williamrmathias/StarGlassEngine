@@ -72,6 +72,8 @@ void RenderEngine::init(SDL_Window* window)
 
     initSwapchain();
 
+    initDepth();
+
     initFrameData();
 
     initGeometryBuffers();
@@ -84,7 +86,8 @@ static void transitionImageLayout(
     VkImage image,
     VkImageLayout oldLayout, VkImageLayout newLayout,
     VkPipelineStageFlags2 srcStage, VkPipelineStageFlags2 dstStage, 
-    VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask)
+    VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask,
+    VkImageAspectFlags aspect)
 {
     VkImageMemoryBarrier2 imageBarrier{};
     imageBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
@@ -99,7 +102,7 @@ static void transitionImageLayout(
     imageBarrier.dstQueueFamilyIndex = 0;
     imageBarrier.image = image;
     imageBarrier.subresourceRange = VkImageSubresourceRange{
-        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .aspectMask = aspect,
         .baseMipLevel = 0,
         .levelCount = 1,
         .baseArrayLayer = 0,
@@ -154,7 +157,17 @@ void RenderEngine::render()
         cmd, swapchainImages[swapchainIdx],
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 
-        0, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
+        0, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+        VK_IMAGE_ASPECT_COLOR_BIT
+    );
+
+    // transition depth image to depth attachment layout
+    transitionImageLayout(
+        cmd, depthImage,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+        0, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        VK_IMAGE_ASPECT_DEPTH_BIT
     );
 
     // update push constants
@@ -200,6 +213,20 @@ void RenderEngine::render()
     colorAttachInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachInfo.clearValue = VkClearValue{ VkClearColorValue{0.f, 0.f, 0.f, 1.f} };
 
+    VkRenderingAttachmentInfo depthAttachInfo{};
+    depthAttachInfo.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depthAttachInfo.pNext = nullptr;
+    depthAttachInfo.imageView = depthView;
+    depthAttachInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthAttachInfo.resolveMode = VK_RESOLVE_MODE_NONE;
+    depthAttachInfo.resolveImageView = VK_NULL_HANDLE;
+    depthAttachInfo.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthAttachInfo.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    depthAttachInfo.clearValue = VkClearValue{
+        .depthStencil = VkClearDepthStencilValue{.depth = 1.f, .stencil = 1} 
+    };
+
     VkRenderingInfo renderInfo{};
     renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     renderInfo.pNext = nullptr;
@@ -209,7 +236,7 @@ void RenderEngine::render()
     renderInfo.viewMask = 0;
     renderInfo.colorAttachmentCount = 1;
     renderInfo.pColorAttachments = &colorAttachInfo;
-    renderInfo.pDepthAttachment = nullptr;
+    renderInfo.pDepthAttachment = &depthAttachInfo;
     renderInfo.pStencilAttachment = nullptr;
 
     vkCmdBeginRendering(cmd, &renderInfo);
@@ -255,7 +282,8 @@ void RenderEngine::render()
         cmd, swapchainImages[swapchainIdx],
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
-        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, 0
+        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, 0,
+        VK_IMAGE_ASPECT_COLOR_BIT
     );
 
     // end command buffer
@@ -347,6 +375,9 @@ void RenderEngine::cleanup()
         vkDestroyImageView(device, view, nullptr);
 
     vkDestroySwapchainKHR(device, swapchain, nullptr); // also destroys swapchain images
+
+    vmaDestroyImage(allocator, depthImage, depthAlloc);
+    vkDestroyImageView(device, depthView, nullptr);
 
     if (staticMesh.has_value())
         staticMesh.value().cleanup(allocator);
@@ -642,6 +673,61 @@ void RenderEngine::initSwapchain()
     }
 }
 
+void RenderEngine::initDepth()
+{
+    // create image and allocation
+    VkImageCreateInfo imageInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = depthFormat,
+        .extent = VkExtent3D{swapchainExtent.width, swapchainExtent.height, 1},
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = 0, // not sharing
+        .pQueueFamilyIndices = nullptr, // not sharing
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
+    };
+
+    VmaAllocationCreateInfo allocInfo{
+        .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .usage = VMA_MEMORY_USAGE_AUTO,
+        .requiredFlags = 0,
+        .preferredFlags = 0,
+        .memoryTypeBits = 0,
+        .pool = VMA_NULL,
+        .pUserData = nullptr,
+        .priority = 0.f
+    };
+
+    VK_Check(vmaCreateImage(allocator, &imageInfo, &allocInfo, &depthImage, &depthAlloc, nullptr));
+
+    // create depth image view
+    VkImageViewCreateInfo viewInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .image = depthImage,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = depthFormat,
+        .components = VkComponentMapping{.r = VK_COMPONENT_SWIZZLE_IDENTITY},
+        .subresourceRange = VkImageSubresourceRange{
+            .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+
+    VK_Check(vkCreateImageView(device, &viewInfo, nullptr, &depthView));
+}
+
 void RenderEngine::initFrameData()
 {
     // create command pools
@@ -719,7 +805,7 @@ static void createBuffer(
 void RenderEngine::initGeometryBuffers()
 {
     // load cube mesh
-    std::filesystem::path boxPath = std::filesystem::current_path() / std::filesystem::path("Assets/Box.glb");
+    std::filesystem::path boxPath = std::filesystem::current_path() / std::filesystem::path("Assets/BoxVertexColors.glb");
     staticMesh = loadStaticMesh(boxPath.string().c_str());
 }
 
@@ -814,9 +900,9 @@ void RenderEngine::initGraphicsPipeline()
     dsInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     dsInfo.pNext = nullptr;
     dsInfo.flags = 0;
-    dsInfo.depthTestEnable = VK_FALSE; // disable depth test
-    dsInfo.depthWriteEnable = VK_FALSE; // disable depth buffer writes
-    dsInfo.depthCompareOp = VK_COMPARE_OP_NEVER;
+    dsInfo.depthTestEnable = VK_TRUE; // enable depth test
+    dsInfo.depthWriteEnable = VK_TRUE; // enable depth buffer writes
+    dsInfo.depthCompareOp = VK_COMPARE_OP_LESS;
     dsInfo.depthBoundsTestEnable = VK_FALSE; // disable depth bounds test
     dsInfo.stencilTestEnable = VK_FALSE; // disable stencil test
     dsInfo.front = VkStencilOpState{};
@@ -890,7 +976,7 @@ void RenderEngine::initGraphicsPipeline()
     renderInfo.viewMask = 0;
     renderInfo.colorAttachmentCount = 1;
     renderInfo.pColorAttachmentFormats = &swapchainFormat;
-    renderInfo.depthAttachmentFormat = VK_FORMAT_UNDEFINED;
+    renderInfo.depthAttachmentFormat = depthFormat;
     renderInfo.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
 
     // create graphics pipeline

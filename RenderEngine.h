@@ -98,6 +98,11 @@ public:
     VkFormat swapchainFormat;
     VkExtent2D swapchainExtent;
 
+    VkImage depthImage;
+    VmaAllocation depthAlloc;
+    VkImageView depthView;
+    VkFormat depthFormat = VK_FORMAT_D16_UNORM;
+
     struct FrameData
     {
         VkSemaphore swapchainSemaphore;
@@ -127,6 +132,7 @@ private:
     void initDevice();
     void initVmaAllocator();
     void initSwapchain();
+    void initDepth();
     void initFrameData();
     void initGeometryBuffers();
     void initGraphicsPipeline();
