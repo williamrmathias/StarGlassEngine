@@ -82,9 +82,13 @@ struct GlobalSceneData
     glm::mat4 viewproj;
 
     glm::vec3 viewPosition;
+    float padding1;
 
     glm::vec3 lightDirection;
+    float padding2;
+
     glm::vec3 lightColor;
+    float padding3;
 };
 
 struct PushConstants

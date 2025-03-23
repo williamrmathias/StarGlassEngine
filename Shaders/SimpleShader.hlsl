@@ -5,9 +5,13 @@ struct GlobalSceneData
     float4x4 viewproj;
     
     float3 viewPosition;
+    float padding1;
     
     float3 lightDirection;
+    float padding2;
+    
     float3 lightColor;
+    float padding3;
 };
 
 [[vk::binding(0, 0)]]
@@ -40,6 +44,7 @@ struct VertexInput
 struct VertexOutput
 {
     float4 position : SV_Position;
+    float3 positionWorld : TEXCOORD0;
     float3 normal : NORMAL0;
     float4 color : COLOR0;
 };
@@ -54,9 +59,12 @@ VertexOutput simpleVS(VertexInput input)
     VertexOutput output;
     float4x4 mvp = mul(globalSceneData.viewproj, pushConstants.model);
     output.position = mul(mvp, float4(input.position, 1.f));
-    output.normal = input.normal;
+    output.positionWorld = mul(pushConstants.model, float4(input.position, 1.f)).xyz;
+    
+    // assume model matrix is orthogonal
+    output.normal = mul(pushConstants.model, float4(input.normal, 1.f)).xyz;
     output.color = input.color;
-	return output;
+    return output;
 }
 
 float heaviside(float x)
@@ -107,19 +115,18 @@ PixelOutput simplePS(VertexOutput input)
 {
     PixelOutput result;
     float4 baseColor = pushConstants.material.baseColorFactor * input.color;
+    float rough2 = pushConstants.material.baseRoughnessFactor * pushConstants.material.baseRoughnessFactor;
     
-    float alpha = pushConstants.material.baseRoughnessFactor * pushConstants.material.baseRoughnessFactor;
-    
-    float3 viewDirection = normalize(globalSceneData.viewPosition - input.position.xyz);
+    float3 viewDirection = normalize(globalSceneData.viewPosition - input.positionWorld);
     float3 lightDirection = normalize(globalSceneData.lightDirection);
     float3 normal = normalize(input.normal);
-    float3 halfway = normalize(viewDirection + globalSceneData.lightDirection);
+    float3 halfway = normalize(viewDirection + lightDirection);
     
     float fresnelFactor = schlicks(F0, dot(viewDirection, halfway));
     
     result.color = float4(lerp(
         diffuseBRDF(baseColor.rgb) * globalSceneData.lightColor,
-        specularBRDF(alpha, viewDirection, lightDirection, normal, halfway) * globalSceneData.lightColor,
+        specularBRDF(rough2, viewDirection, lightDirection, normal, halfway) * globalSceneData.lightColor,
         fresnelFactor
     ), 1.f);
     return result;
