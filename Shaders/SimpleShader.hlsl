@@ -3,6 +3,11 @@
 struct GlobalSceneData
 {
     float4x4 viewproj;
+    
+    float3 viewPosition;
+    
+    float3 lightDirection;
+    float3 lightColor;
 };
 
 [[vk::binding(0, 0)]]
@@ -35,6 +40,7 @@ struct VertexInput
 struct VertexOutput
 {
     float4 position : SV_Position;
+    float3 normal : NORMAL0;
     float4 color : COLOR0;
 };
 
@@ -48,6 +54,7 @@ VertexOutput simpleVS(VertexInput input)
     VertexOutput output;
     float4x4 mvp = mul(globalSceneData.viewproj, pushConstants.model);
     output.position = mul(mvp, float4(input.position, 1.f));
+    output.normal = input.normal;
     output.color = input.color;
 	return output;
 }
@@ -61,7 +68,7 @@ float heaviside(float x)
 float schlicks(float f0, float VdotH)
 {
     float vdoth2 = VdotH * VdotH;
-    return f0 + (1 - f0) * (vdoth2 * vdoth2 * VdotH);
+    return f0 + (1 - f0) * abs(vdoth2 * vdoth2 * VdotH);
 }
 
 // microfacet brdf based on the Trowbridge-Reitz distribution
@@ -90,14 +97,30 @@ float specularBRDF(float alpha, float3 viewDir, float3 lightDir, float3 normal, 
 }
 
 // lambertian brdf
-float diffuseBRDF(float3 color)
+float3 diffuseBRDF(float3 color)
 {
     return (1.f / PI) * color;
 }
 
+#define F0 0.04
 PixelOutput simplePS(VertexOutput input)
 {
     PixelOutput result;
-    result.color = pushConstants.material.baseColorFactor * input.color;
+    float4 baseColor = pushConstants.material.baseColorFactor * input.color;
+    
+    float alpha = pushConstants.material.baseRoughnessFactor * pushConstants.material.baseRoughnessFactor;
+    
+    float3 viewDirection = normalize(globalSceneData.viewPosition - input.position.xyz);
+    float3 lightDirection = normalize(globalSceneData.lightDirection);
+    float3 normal = normalize(input.normal);
+    float3 halfway = normalize(viewDirection + globalSceneData.lightDirection);
+    
+    float fresnelFactor = schlicks(F0, dot(viewDirection, halfway));
+    
+    result.color = float4(lerp(
+        diffuseBRDF(baseColor.rgb) * globalSceneData.lightColor,
+        specularBRDF(alpha, viewDirection, lightDirection, normal, halfway) * globalSceneData.lightColor,
+        fresnelFactor
+    ), 1.f);
     return result;
 }

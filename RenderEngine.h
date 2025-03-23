@@ -80,6 +80,11 @@ struct StaticMesh
 struct GlobalSceneData
 {
     glm::mat4 viewproj;
+
+    glm::vec3 viewPosition;
+
+    glm::vec3 lightDirection;
+    glm::vec3 lightColor;
 };
 
 struct PushConstants

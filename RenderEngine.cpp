@@ -179,7 +179,12 @@ void RenderEngine::render()
     glm::mat4 projection = glm::perspective(glm::radians(45.f), 1280.f / 720.f, 0.1f, 100.f);
     projection[1][1] *= -1; // correct gl -> vk
 
-    globalSceneData.viewproj = projection * view;
+    globalSceneData = GlobalSceneData{
+        .viewproj = projection * view,
+        .viewPosition = glm::vec3{1.f, 2.f, 5.f},
+        .lightDirection = glm::vec3{0.f, 1.f, 0.5f},
+        .lightColor = glm::vec3{1.f, 1.f, 1.f}
+    };
 
     // copy to uniform buffer
     vmaCopyMemoryToAllocation(
@@ -280,7 +285,7 @@ void RenderEngine::render()
             vkCmdPushConstants(
                 cmd,
                 graphicsPipelineLayout,
-                VK_SHADER_STAGE_VERTEX_BIT,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                 0,
                 sizeof(PushConstants),
                 &pushConstants
@@ -768,7 +773,7 @@ void RenderEngine::initDescriptorPool()
         .binding = 0,
         .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
         .descriptorCount = 1,
-        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         .pImmutableSamplers = nullptr
     };
 
