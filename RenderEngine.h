@@ -47,6 +47,13 @@ struct Vertex
     static std::array<VkVertexInputAttributeDescription, 4> getInputAttributeDescription();
 };
 
+struct Material
+{
+    glm::vec4 baseColorFactor;
+    float baseMetalnessFactor;
+    float baseRoughnessFactor;
+};
+
 struct MeshSurface
 {
     VkBuffer vertexBuffer;
@@ -59,6 +66,8 @@ struct MeshSurface
 
     VkPrimitiveTopology topology;
     VkIndexType indexType;
+
+    Material material;
 };
 
 struct StaticMesh
@@ -76,6 +85,7 @@ struct GlobalSceneData
 struct PushConstants
 {
     glm::mat4 model;
+    Material material;
 };
 
 class RenderEngine

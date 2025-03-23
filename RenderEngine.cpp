@@ -173,30 +173,6 @@ void RenderEngine::render()
     );
 
     // update constants
-    static float angle = 0.f;
-    glm::mat4 model = glm::identity<glm::mat4>();
-    model = glm::translate(model, glm::vec3(0.f, 0.f, 1.f));
-    model = glm::rotate(
-        model, 
-        glm::radians(angle), 
-        glm::vec3(0.f, 1.f, 0.f)
-    );
-
-    PushConstants pushConstants{
-        .model = model
-    };
-
-    vkCmdPushConstants(
-        cmd,
-        graphicsPipelineLayout,
-        VK_SHADER_STAGE_VERTEX_BIT,
-        0,
-        sizeof(PushConstants),
-        &pushConstants
-    );
-
-    angle += 0.1f;
-
     glm::mat4 view = 
         glm::lookAt(glm::vec3(1.f, 2.f, 5.f), glm::vec3(0.f, 0.f, 0.f), glm::vec3(0, 1, 0));
 
@@ -285,6 +261,32 @@ void RenderEngine::render()
 
             VkDeviceSize indexBufferOffset{ 0 };
             vkCmdBindIndexBuffer(cmd, surface.indexBuffer, indexBufferOffset, surface.indexType);
+
+            // set push constants
+            static float angle = 0.f;
+            glm::mat4 model = glm::identity<glm::mat4>();
+            model = glm::translate(model, glm::vec3(0.f, 0.f, 1.f));
+            model = glm::rotate(
+                model,
+                glm::radians(angle),
+                glm::vec3(0.f, 1.f, 0.f)
+            );
+
+            PushConstants pushConstants{
+                .model = model,
+                .material = surface.material
+            };
+
+            vkCmdPushConstants(
+                cmd,
+                graphicsPipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT,
+                0,
+                sizeof(PushConstants),
+                &pushConstants
+            );
+
+            angle += 0.1f;
 
             vkCmdDrawIndexed(cmd, surface.indexCount, 1, 0, 0, 0);
         }
@@ -928,7 +930,7 @@ void RenderEngine::initFrameData()
 void RenderEngine::initGeometryBuffers()
 {
     // load cube mesh
-    std::filesystem::path boxPath = std::filesystem::current_path() / std::filesystem::path("Assets/BoxVertexColors.glb");
+    std::filesystem::path boxPath = std::filesystem::current_path() / std::filesystem::path("Assets/Box.glb");
     staticMesh = loadStaticMesh(boxPath.string().c_str());
 }
 
@@ -1075,7 +1077,7 @@ void RenderEngine::initGraphicsPipeline()
 
     // make push constants
     VkPushConstantRange pushConstants{
-        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         .offset = 0,
         .size = static_cast<uint32_t>(sizeof(PushConstants))
     };
@@ -1304,17 +1306,34 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
         cgltf_primitive* surface = &gltfMesh->primitives[i];
 
         // get primative topology
-        // TODO: Implement rendering all topology types
-        switch (surface->type) 
         {
-        case cgltf_primitive_type_triangles:
-            newSurface.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-            break;
-        default:
-            SDL_LogError(
-                0, "Mesh load error: Mesh primitive contains invalid topology: %s\n", meshPath);
-            SDL_LogError(0, "GLTF topology code: %i\n", surface->type);
-            return std::nullopt;
+            // TODO: Implement rendering all topology types
+            switch (surface->type)
+            {
+            case cgltf_primitive_type_triangles:
+                newSurface.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+                break;
+            default:
+                SDL_LogError(
+                    0, "Mesh load error: Mesh primitive contains invalid topology: %s\n", meshPath);
+                SDL_LogError(0, "GLTF topology code: %i\n", surface->type);
+                return std::nullopt;
+            }
+        }
+
+        // load material
+        {
+            newSurface.material = {};
+            if (surface->material && surface->material->has_pbr_metallic_roughness)
+            {
+                cgltf_pbr_metallic_roughness& pbrMetalRough 
+                    = surface->material->pbr_metallic_roughness;
+
+                newSurface.material.baseColorFactor 
+                    = glm::make_vec4(pbrMetalRough.base_color_factor);
+                newSurface.material.baseMetalnessFactor = pbrMetalRough.metallic_factor;
+                newSurface.material.baseRoughnessFactor = pbrMetalRough.roughness_factor;
+            }
         }
 
         // load index buffer
@@ -1447,7 +1466,7 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
                     else if (colorChannels == 3)
                         vertexData[i].color = glm::vec4{ glm::make_vec3(&colorData[3 * i]), 1.f };
                     else
-                        vertexData[i].color = glm::vec4{ 0.5f, 0.5f, 0.5f, 1.f };
+                        vertexData[i].color = glm::vec4{ 1.f, 1.f, 1.f, 1.f };
                 }
             }
 

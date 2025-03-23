@@ -1,3 +1,5 @@
+#define PI 3.1415926538
+
 struct GlobalSceneData
 {
     float4x4 viewproj;
@@ -6,9 +8,17 @@ struct GlobalSceneData
 [[vk::binding(0, 0)]]
 ConstantBuffer<GlobalSceneData> globalSceneData : register(b0);
 
+struct Material
+{
+    float4 baseColorFactor;
+    float baseMetalnessFactor;
+    float baseRoughnessFactor;
+};
+
 struct PushConstants
 {
     float4x4 model;
+    Material material;
 };
 
 [[vk::push_constant]]
@@ -42,9 +52,52 @@ VertexOutput simpleVS(VertexInput input)
 	return output;
 }
 
+float heaviside(float x)
+{
+    return x > 0.f ? 1.f : 0.f;
+}
+
+// Schlick's approximation to the Fresnel term
+float schlicks(float f0, float VdotH)
+{
+    float vdoth2 = VdotH * VdotH;
+    return f0 + (1 - f0) * (vdoth2 * vdoth2 * VdotH);
+}
+
+// microfacet brdf based on the Trowbridge-Reitz distribution
+// alpha = roughness ^ 2
+float specularBRDF(float alpha, float3 viewDir, float3 lightDir, float3 normal, float3 halfway)
+{
+    float alpha2 = alpha * alpha;
+    float oneMinusAlpha2 = 1.f - alpha2;
+    
+    float NdotH = dot(normal, halfway);
+    float x = (NdotH * NdotH) * (-oneMinusAlpha2) + 1.f;
+    
+    float D = (alpha2 * heaviside(NdotH)) / (PI * x * x);
+    
+    float NdotL = dot(normal, lightDir);
+    float HdotL = dot(halfway, lightDir);
+    
+    float vL = heaviside(HdotL) / (abs(NdotL) + sqrt(alpha2 + oneMinusAlpha2 * (NdotL * NdotL)));
+    
+    float NdotV = dot(normal, viewDir);
+    float HdotV = dot(halfway, viewDir);
+    
+    float vV = heaviside(HdotV) / (abs(NdotV) + sqrt(alpha2 + oneMinusAlpha2 * (NdotV * NdotV)));
+    
+    return vV * vL * D;
+}
+
+// lambertian brdf
+float diffuseBRDF(float3 color)
+{
+    return (1.f / PI) * color;
+}
+
 PixelOutput simplePS(VertexOutput input)
 {
     PixelOutput result;
-    result.color = input.color;
+    result.color = pushConstants.material.baseColorFactor * input.color;
     return result;
 }
