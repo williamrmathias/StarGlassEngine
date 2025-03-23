@@ -68,9 +68,14 @@ struct StaticMesh
     void cleanup(VmaAllocator allocator);
 };
 
+struct GlobalSceneData
+{
+    glm::mat4 viewproj;
+};
+
 struct PushConstants
 {
-    glm::mat4 mvp; // model view projection matrix;
+    glm::mat4 model;
 };
 
 class RenderEngine
@@ -103,6 +108,11 @@ public:
     VkImageView depthView;
     VkFormat depthFormat = VK_FORMAT_D16_UNORM;
 
+    GlobalSceneData globalSceneData;
+
+    VkDescriptorPool globalDescriptorPool;
+    VkDescriptorSetLayout globalSceneDataLayout;
+
     struct FrameData
     {
         VkSemaphore swapchainSemaphore;
@@ -112,12 +122,20 @@ public:
         VkCommandPool commandPool;
         VkCommandBuffer commandBuffer;
 
-        void cleanup(VkDevice device);
+        VkBuffer uniformBuffer;
+        VmaAllocation uniformAlloc;
+
+        VkDescriptorSet descriptorSet;
+
+        void cleanup(VkDevice device, VmaAllocator allocator);
     };
     FrameData frames[NUM_FRAMES];
     size_t currentFrameNumber = 0;
 
     std::optional<StaticMesh> staticMesh;
+
+    VkBuffer uniformBuffer;
+    VmaAllocation uniformAlloc;
 
     VkPipelineLayout graphicsPipelineLayout;
     VkPipeline graphicsPipeline;
@@ -133,6 +151,7 @@ private:
     void initVmaAllocator();
     void initSwapchain();
     void initDepth();
+    void initDescriptorPool();
     void initFrameData();
     void initGeometryBuffers();
     void initGraphicsPipeline();
