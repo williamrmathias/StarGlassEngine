@@ -21,6 +21,10 @@
 #define CGLTF_IMPLEMENTATION
 #include <cgltf.h>
 
+// stb
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
 static inline void VK_Check(VkResult result)
 {
     if (result != VK_SUCCESS)
@@ -701,31 +705,63 @@ void RenderEngine::initSwapchain()
     }
 }
 
-void RenderEngine::initDepth()
+/*
+* creates, allocates, and copies data for a Buffer object
+*/
+static void createBuffer(
+    VmaAllocator allocator,
+    void* data, VkDeviceSize dataSize, VkBufferUsageFlags usage,
+    VkBuffer& buffer, VmaAllocation& allocation)
 {
-    // get depth format
-    VkFormatProperties formatProps;
-    vkGetPhysicalDeviceFormatProperties(physicalDevice, depthFormat, &formatProps);
-    bool supportsFormat = formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
-    if (!supportsFormat)
-    {
-        SDL_LogError(0, "Depth image error: format not supported by device\n");
-        std::abort();
-    }
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.pNext = nullptr;
+    bufferInfo.flags = 0;
+    bufferInfo.size = dataSize;
+    bufferInfo.usage = usage;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // exclusive to graphics queue
+    bufferInfo.queueFamilyIndexCount = 0;
+    bufferInfo.pQueueFamilyIndices = nullptr;
 
+    VmaAllocationCreateInfo allocInfo{};
+    allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+    allocInfo.requiredFlags = 0;
+    allocInfo.preferredFlags = 0;
+    allocInfo.memoryTypeBits = 0;
+    allocInfo.pool = VMA_NULL;
+    allocInfo.pUserData = nullptr;
+    allocInfo.priority = 0.f;
+
+    VK_Check(vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &buffer, &allocation, nullptr));
+
+    // if input data is provided, copy it to the allocation
+    if (data)
+        vmaCopyMemoryToAllocation(allocator, data, allocation, 0, dataSize);
+}
+
+/*
+* creates, allocates, and copies data for an Texture object
+*/
+static void createImage(
+    VmaAllocator allocator, 
+    void* data, VkDeviceSize dataSize, VkImageUsageFlags usage,
+    VkFormat format, VkExtent3D extent, 
+    VkImage& image, VmaAllocation& allocation)
+{
     // create image and allocation
     VkImageCreateInfo imageInfo{
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
         .imageType = VK_IMAGE_TYPE_2D,
-        .format = depthFormat,
-        .extent = VkExtent3D{swapchainExtent.width, swapchainExtent.height, 1},
+        .format = format,
+        .extent = extent,
         .mipLevels = 1,
         .arrayLayers = 1,
         .samples = VK_SAMPLE_COUNT_1_BIT,
         .tiling = VK_IMAGE_TILING_OPTIMAL,
-        .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        .usage = usage,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
         .queueFamilyIndexCount = 0, // not sharing
         .pQueueFamilyIndices = nullptr, // not sharing
@@ -743,27 +779,90 @@ void RenderEngine::initDepth()
         .priority = 0.f
     };
 
-    VK_Check(vmaCreateImage(allocator, &imageInfo, &allocInfo, &depthImage, &depthAlloc, nullptr));
+    VK_Check(vmaCreateImage(allocator, &imageInfo, &allocInfo, &image, &allocation, nullptr));
 
-    // create depth image view
+    // if input data is provided, copy it to the allocation
+    if (data)
+        vmaCopyMemoryToAllocation(allocator, data, allocation, 0, dataSize);
+}
+
+static VkImageView createImageView(VkDevice device, VkImage image, VkFormat format, VkImageAspectFlags aspect)
+{
     VkImageViewCreateInfo viewInfo{
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
-        .image = depthImage,
+        .image = image,
         .viewType = VK_IMAGE_VIEW_TYPE_2D,
-        .format = depthFormat,
-        .components = VkComponentMapping{.r = VK_COMPONENT_SWIZZLE_IDENTITY},
+        .format = format,
+        .components = VkComponentMapping{
+            .r = VK_COMPONENT_SWIZZLE_IDENTITY, 
+            .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .a = VK_COMPONENT_SWIZZLE_IDENTITY
+        },
         .subresourceRange = VkImageSubresourceRange{
-            .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+            .aspectMask = aspect,
             .baseMipLevel = 0,
             .levelCount = 1,
             .baseArrayLayer = 0,
             .layerCount = 1
-        }
+        },
     };
 
-    VK_Check(vkCreateImageView(device, &viewInfo, nullptr, &depthView));
+    VkImageView imageView;
+    VK_Check(vkCreateImageView(device, &viewInfo, nullptr, &imageView));
+    return imageView;
+}
+
+static VkSampler createSampler(VkDevice device, VkFilter magFilter, VkFilter minFilter, VkSamplerAddressMode uWrap, VkSamplerAddressMode vWrap)
+{
+    VkSamplerCreateInfo samplerInfo{
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .magFilter = magFilter,
+        .minFilter = minFilter,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST, // no mipmaps for now
+        .addressModeU = uWrap,
+        .addressModeV = vWrap,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT, // no 3d textures for now
+        .mipLodBias = 0.f,
+        .anisotropyEnable = VK_FALSE,
+        .maxAnisotropy = 0.f,
+        .compareEnable = VK_FALSE,
+        .compareOp = VK_COMPARE_OP_NEVER,
+        .minLod = 0.f,
+        .maxLod = 0.f,
+        .borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK,
+        .unnormalizedCoordinates = VK_FALSE
+    };
+
+    VkSampler sampler;
+    VK_Check(vkCreateSampler(device, &samplerInfo, nullptr, &sampler));
+    return sampler;
+}
+
+void RenderEngine::initDepth()
+{
+    // get depth format
+    VkFormatProperties formatProps;
+    vkGetPhysicalDeviceFormatProperties(physicalDevice, depthFormat, &formatProps);
+    bool supportsFormat = formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    if (!supportsFormat)
+    {
+        SDL_LogError(0, "Depth image error: format not supported by device\n");
+        std::abort();
+    }
+
+    createImage(
+        allocator, nullptr, 0, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 
+        depthFormat, VkExtent3D{ swapchainExtent.width, swapchainExtent.height, 1 }, 
+        depthImage, depthAlloc
+    );
+
+    // create depth image view
+    depthView = createImageView(device, depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
 }
 
 void RenderEngine::initDescriptorPool()
@@ -803,41 +902,6 @@ void RenderEngine::initDescriptorPool()
     };
 
     VK_Check(vkCreateDescriptorPool(device, &poolInfo, nullptr, &globalDescriptorPool));
-}
-
-/*
-* creates, allocates, and copies data for a Buffer object
-*/
-static void createBuffer(
-    VmaAllocator allocator,
-    void* data, VkDeviceSize dataSize, VkBufferUsageFlags usage,
-    VkBuffer& buffer, VmaAllocation& allocation)
-{
-    VkBufferCreateInfo bufferInfo{};
-    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.pNext = nullptr;
-    bufferInfo.flags = 0;
-    bufferInfo.size = dataSize;
-    bufferInfo.usage = usage;
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // exclusive to graphics queue
-    bufferInfo.queueFamilyIndexCount = 0;
-    bufferInfo.pQueueFamilyIndices = nullptr;
-
-    VmaAllocationCreateInfo allocInfo{};
-    allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
-    allocInfo.requiredFlags = 0;
-    allocInfo.preferredFlags = 0;
-    allocInfo.memoryTypeBits = 0;
-    allocInfo.pool = VMA_NULL;
-    allocInfo.pUserData = nullptr;
-    allocInfo.priority = 0.f;
-
-    VK_Check(vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &buffer, &allocation, nullptr));
-
-    // if input data is provided, copy it to the allocation
-    if (data)
-        vmaCopyMemoryToAllocation(allocator, data, allocation, 0, dataSize);
 }
 
 void RenderEngine::initFrameData()
@@ -1338,6 +1402,33 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
                     = glm::make_vec4(pbrMetalRough.base_color_factor);
                 newSurface.material.baseMetalnessFactor = pbrMetalRough.metallic_factor;
                 newSurface.material.baseRoughnessFactor = pbrMetalRough.roughness_factor;
+
+                // load base color texture
+                if (pbrMetalRough.base_color_texture.texture)
+                {
+                    cgltf_image* baseColorImage = pbrMetalRough.base_color_texture.texture->image;
+                    const uint8_t* data = cgltf_buffer_view_data(baseColorImage->buffer_view);
+
+                    int width, height, nChannels;
+                    stbi_uc* imageData = stbi_load_from_memory(
+                        data, static_cast<int>(baseColorImage->buffer_view->size), 
+                        &width, &height, &nChannels, STBI_rgb_alpha
+                    );
+
+                    createImage(
+                        allocator, imageData, 
+                        static_cast<VkDeviceSize>(width * height * STBI_rgb_alpha), 
+                        VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R8G8B8A8_UNORM, 
+                        VkExtent3D{static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1},
+                        newSurface.material.baseColorTex.image, newSurface.material.baseColorTex.alloc
+                    );
+
+                    newSurface.material.baseColorTex.view = 
+                        createImageView(
+                            device, newSurface.material.baseColorTex.image,
+                            VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT
+                        );
+                }
             }
         }
 

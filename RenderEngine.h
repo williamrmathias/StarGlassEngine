@@ -47,21 +47,35 @@ struct Vertex
     static std::array<VkVertexInputAttributeDescription, 4> getInputAttributeDescription();
 };
 
+struct Texture
+{
+    VkImage image;
+    VmaAllocation alloc;
+
+    VkImageView view;
+
+    VkSampler sampler;
+};
+
 struct Material
 {
     glm::vec4 baseColorFactor;
     float baseMetalnessFactor;
     float baseRoughnessFactor;
+
+    Texture baseColorTex;
+    Texture metalRoughTex;
 };
 
 struct MeshSurface
 {
     VkBuffer vertexBuffer;
     VmaAllocation vertexAlloc;
-    uint32_t vertexCount;
 
     VkBuffer indexBuffer;
     VmaAllocation indexAlloc;
+
+    uint32_t vertexCount;
     uint32_t indexCount;
 
     VkPrimitiveTopology topology;
