@@ -381,12 +381,27 @@ void RenderEngine::FrameData::cleanup(VkDevice device, VmaAllocator allocator)
     vmaDestroyBuffer(allocator, uniformBuffer, uniformAlloc);
 }
 
-void StaticMesh::cleanup(VmaAllocator allocator)
+void Texture::cleanup(VkDevice device, VmaAllocator allocator)
+{
+    vmaDestroyImage(allocator, image, alloc);
+    vkDestroyImageView(device, view, nullptr);
+    vkDestroySampler(device, sampler, nullptr);
+}
+
+void Material::cleanup(VkDevice device, VmaAllocator allocator)
+{
+    baseColorTex.cleanup(device, allocator);
+    metalRoughTex.cleanup(device, allocator);
+}
+
+void StaticMesh::cleanup(VkDevice device, VmaAllocator allocator)
 {
     for (MeshSurface& surface : surfaces)
     {
         vmaDestroyBuffer(allocator, surface.indexBuffer, surface.indexAlloc);
         vmaDestroyBuffer(allocator, surface.vertexBuffer, surface.vertexAlloc);
+
+        surface.material.cleanup(device, allocator);
     }
 }
 
@@ -412,7 +427,7 @@ void RenderEngine::cleanup()
     vkDestroyImageView(device, depthView, nullptr);
 
     if (staticMesh.has_value())
-        staticMesh.value().cleanup(allocator);
+        staticMesh.value().cleanup(device, allocator);
 
     vmaDestroyAllocator(allocator);
 
@@ -999,7 +1014,7 @@ void RenderEngine::initFrameData()
 void RenderEngine::initGeometryBuffers()
 {
     // load cube mesh
-    std::filesystem::path boxPath = std::filesystem::current_path() / std::filesystem::path("Assets/Box.glb");
+    std::filesystem::path boxPath = std::filesystem::current_path() / std::filesystem::path("Assets/BoxTextured.glb");
     staticMesh = loadStaticMesh(boxPath.string().c_str());
 }
 
@@ -1382,7 +1397,7 @@ Texture RenderEngine::loadTexture(cgltf_texture* texture)
         break;
     }
 
-    VkSamplerAddressMode uWrap;
+    VkSamplerAddressMode uWrap{};
     switch (sampler->wrap_s)
     {
     case cgltf_wrap_mode_clamp_to_edge:
@@ -1396,7 +1411,7 @@ Texture RenderEngine::loadTexture(cgltf_texture* texture)
         break;
     }
 
-    VkSamplerAddressMode vWrap;
+    VkSamplerAddressMode vWrap{};
     switch (sampler->wrap_t)
     {
     case cgltf_wrap_mode_clamp_to_edge:

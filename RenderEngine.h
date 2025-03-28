@@ -58,6 +58,8 @@ struct Texture
     VkImageView view;
 
     VkSampler sampler;
+
+    void cleanup(VkDevice device, VmaAllocator allocator);
 };
 
 struct Material
@@ -68,6 +70,8 @@ struct Material
 
     Texture baseColorTex;
     Texture metalRoughTex;
+
+    void cleanup(VkDevice device, VmaAllocator allocator);
 };
 
 struct MeshSurface
@@ -91,7 +95,7 @@ struct StaticMesh
 {
     std::vector<MeshSurface> surfaces;
 
-    void cleanup(VmaAllocator allocator);
+    void cleanup(VkDevice device, VmaAllocator allocator);
 };
 
 struct GlobalSceneData
