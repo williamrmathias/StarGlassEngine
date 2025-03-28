@@ -12,6 +12,9 @@
 #include <SDL2/SDL_vulkan.h>
 #include <SDL2/SDL_filesystem.h>
 
+// cgltf
+#include <cgltf.h>
+
 // VMA
 #include <vma/vk_mem_alloc.h>
 
@@ -60,8 +63,8 @@ struct Texture
 struct Material
 {
     glm::vec4 baseColorFactor;
-    float baseMetalnessFactor;
-    float baseRoughnessFactor;
+    float metalnessFactor;
+    float roughnessFactor;
 
     Texture baseColorTex;
     Texture metalRoughTex;
@@ -194,6 +197,7 @@ private:
     FrameData& getCurrentFrameData();
     void incrementFrameData();
     VkShaderModule loadShaderModule(const char* shaderPath);
+    Texture loadTexture(cgltf_texture* texture);
     std::optional<StaticMesh> loadStaticMesh(const char* meshPath);
 };
 

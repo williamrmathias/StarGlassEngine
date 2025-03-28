@@ -1326,6 +1326,97 @@ struct ScopedGLTFData
     }
 };
 
+Texture RenderEngine::loadTexture(cgltf_texture* texture)
+{
+    Texture resultTex;
+
+    cgltf_image* image = texture->image;
+    const uint8_t* data = cgltf_buffer_view_data(image->buffer_view);
+
+    int width, height, nChannels;
+    stbi_uc* imageData = stbi_load_from_memory(
+        data, static_cast<int>(image->buffer_view->size),
+        &width, &height, &nChannels, STBI_rgb_alpha
+    );
+
+    createImage(
+        allocator, imageData,
+        static_cast<VkDeviceSize>(width * height * STBI_rgb_alpha),
+        VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R8G8B8A8_UNORM,
+        VkExtent3D{ static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1 },
+        resultTex.image, resultTex.alloc
+    );
+
+    resultTex.view = createImageView(
+        device, resultTex.image,
+        VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT
+    );
+
+    cgltf_sampler* sampler = texture->sampler;
+
+    VkFilter magFilter;
+    switch (sampler->mag_filter)
+    {
+    case cgltf_filter_type_nearest:
+        magFilter = VK_FILTER_NEAREST;
+        break;
+    case cgltf_filter_type_linear:
+    default:
+        magFilter = VK_FILTER_LINEAR;
+        break;
+    }
+
+    VkFilter minFilter;
+    switch (sampler->min_filter)
+    {
+    case cgltf_filter_type_nearest:
+    case cgltf_filter_type_nearest_mipmap_nearest:
+    case cgltf_filter_type_nearest_mipmap_linear:
+        minFilter = VK_FILTER_NEAREST;
+        break;
+    case cgltf_filter_type_linear:
+    case cgltf_filter_type_linear_mipmap_nearest:
+    case cgltf_filter_type_linear_mipmap_linear:
+    default:
+        minFilter = VK_FILTER_LINEAR;
+        break;
+    }
+
+    VkSamplerAddressMode uWrap;
+    switch (sampler->wrap_s)
+    {
+    case cgltf_wrap_mode_clamp_to_edge:
+        uWrap = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        break;
+    case cgltf_wrap_mode_mirrored_repeat:
+        uWrap = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+        break;
+    case cgltf_wrap_mode_repeat:
+        uWrap = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        break;
+    }
+
+    VkSamplerAddressMode vWrap;
+    switch (sampler->wrap_t)
+    {
+    case cgltf_wrap_mode_clamp_to_edge:
+        vWrap = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        break;
+    case cgltf_wrap_mode_mirrored_repeat:
+        vWrap = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+        break;
+    case cgltf_wrap_mode_repeat:
+        vWrap = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        break;
+    }
+
+    resultTex.sampler = createSampler(
+        device, magFilter, minFilter, uWrap, vWrap
+    );
+
+    return resultTex;
+}
+
 std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
 {
     cgltf_options options{}; // default loading options
@@ -1400,34 +1491,23 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
 
                 newSurface.material.baseColorFactor 
                     = glm::make_vec4(pbrMetalRough.base_color_factor);
-                newSurface.material.baseMetalnessFactor = pbrMetalRough.metallic_factor;
-                newSurface.material.baseRoughnessFactor = pbrMetalRough.roughness_factor;
+                newSurface.material.metalnessFactor = pbrMetalRough.metallic_factor;
+                newSurface.material.roughnessFactor = pbrMetalRough.roughness_factor;
 
                 // load base color texture
                 if (pbrMetalRough.base_color_texture.texture)
                 {
-                    cgltf_image* baseColorImage = pbrMetalRough.base_color_texture.texture->image;
-                    const uint8_t* data = cgltf_buffer_view_data(baseColorImage->buffer_view);
-
-                    int width, height, nChannels;
-                    stbi_uc* imageData = stbi_load_from_memory(
-                        data, static_cast<int>(baseColorImage->buffer_view->size), 
-                        &width, &height, &nChannels, STBI_rgb_alpha
+                    newSurface.material.baseColorTex = loadTexture(
+                        pbrMetalRough.base_color_texture.texture
                     );
+                }
 
-                    createImage(
-                        allocator, imageData, 
-                        static_cast<VkDeviceSize>(width * height * STBI_rgb_alpha), 
-                        VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R8G8B8A8_UNORM, 
-                        VkExtent3D{static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1},
-                        newSurface.material.baseColorTex.image, newSurface.material.baseColorTex.alloc
+                // load metallic roughness texture
+                if (pbrMetalRough.metallic_roughness_texture.texture)
+                {
+                    newSurface.material.metalRoughTex = loadTexture(
+                        pbrMetalRough.metallic_roughness_texture.texture
                     );
-
-                    newSurface.material.baseColorTex.view = 
-                        createImageView(
-                            device, newSurface.material.baseColorTex.image,
-                            VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT
-                        );
                 }
             }
         }
