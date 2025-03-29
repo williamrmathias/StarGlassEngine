@@ -38,6 +38,7 @@ static const std::array<const char*, 3> deviceExtensions = {
 static const uint32_t vkApiVersion = VK_API_VERSION_1_3;
 
 static const size_t NUM_FRAMES = 2;
+static const uint32_t NUM_MATERIALS_MAX = 10;
 
 struct Vertex
 {
@@ -55,21 +56,27 @@ struct Texture
     VkImage image;
     VmaAllocation alloc;
 
-    VkImageView view;
-
     VkSampler sampler;
+    VkImageView view;
 
     void cleanup(VkDevice device, VmaAllocator allocator);
 };
 
-struct Material
+struct MaterialConstants
 {
     glm::vec4 baseColorFactor;
     float metalnessFactor;
     float roughnessFactor;
+};
+
+struct Material
+{
+    MaterialConstants constants;
 
     Texture baseColorTex;
     Texture metalRoughTex;
+
+    VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
 
     void cleanup(VkDevice device, VmaAllocator allocator);
 };
@@ -112,10 +119,13 @@ struct GlobalSceneData
     float padding3;
 };
 
+// must be 128 bytes
 struct PushConstants
 {
     glm::mat4 model;
-    Material material;
+    MaterialConstants material;
+
+    float padding[10];
 };
 
 class RenderEngine
@@ -152,6 +162,7 @@ public:
 
     VkDescriptorPool globalDescriptorPool;
     VkDescriptorSetLayout globalSceneDataLayout;
+    VkDescriptorSetLayout materialLayout;
 
     struct FrameData
     {
@@ -201,6 +212,7 @@ private:
     FrameData& getCurrentFrameData();
     void incrementFrameData();
     VkShaderModule loadShaderModule(const char* shaderPath);
+    void initMaterialDescriptor(Material& material);
     Texture loadTexture(cgltf_texture* texture);
     std::optional<StaticMesh> loadStaticMesh(const char* meshPath);
 };

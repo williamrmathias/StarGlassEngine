@@ -271,6 +271,12 @@ void RenderEngine::render()
             VkDeviceSize indexBufferOffset{ 0 };
             vkCmdBindIndexBuffer(cmd, surface.indexBuffer, indexBufferOffset, surface.indexType);
 
+            // bind material
+            vkCmdBindDescriptorSets(
+                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout, 0, 1, 
+                &surface.material.descriptorSet, 0, nullptr
+            );
+
             // set push constants
             static float angle = 0.f;
             glm::mat4 model = glm::identity<glm::mat4>();
@@ -283,7 +289,7 @@ void RenderEngine::render()
 
             PushConstants pushConstants{
                 .model = model,
-                .material = surface.material
+                .material = surface.material.constants
             };
 
             vkCmdPushConstants(
@@ -414,6 +420,7 @@ void RenderEngine::cleanup()
 
     vkDestroyDescriptorPool(device, globalDescriptorPool, nullptr);
     vkDestroyDescriptorSetLayout(device, globalSceneDataLayout, nullptr);
+    vkDestroyDescriptorSetLayout(device, materialLayout, nullptr);
 
     vkDestroyPipelineLayout(device, graphicsPipelineLayout, nullptr);
     vkDestroyPipeline(device, graphicsPipeline, nullptr);
@@ -883,7 +890,7 @@ void RenderEngine::initDepth()
 void RenderEngine::initDescriptorPool()
 {
     // make global scene descriptor layout
-    VkDescriptorSetLayoutBinding binding{
+    VkDescriptorSetLayoutBinding globalSceneBinding{
         .binding = 0,
         .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
         .descriptorCount = 1,
@@ -896,24 +903,62 @@ void RenderEngine::initDescriptorPool()
         .pNext = nullptr,
         .flags = 0,
         .bindingCount = 1,
-        .pBindings = &binding
+        .pBindings = &globalSceneBinding
     };
 
     VK_Check(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &globalSceneDataLayout));
 
+    // make material layout
+    std::array<VkDescriptorSetLayoutBinding, 2> materialBindings;
+    
+    // base color
+    materialBindings[0] = VkDescriptorSetLayoutBinding{
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = nullptr
+    };
+
+    // metallic + roughness
+    materialBindings[1] = VkDescriptorSetLayoutBinding{
+        .binding = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = nullptr
+    };
+
+    layoutInfo = VkDescriptorSetLayoutCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .bindingCount = static_cast<uint32_t>(materialBindings.size()),
+        .pBindings = materialBindings.data()
+    };
+
+    VK_Check(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &materialLayout));
+
     // make descriptor pool
-    VkDescriptorPoolSize poolSize{
+    std::array<VkDescriptorPoolSize, 2> poolSizes;
+
+    poolSizes[0] = VkDescriptorPoolSize{
         .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
         .descriptorCount = static_cast<uint32_t>(NUM_FRAMES)
+    };
+
+    poolSizes[1] = VkDescriptorPoolSize{
+        .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = NUM_MATERIALS_MAX
     };
 
     VkDescriptorPoolCreateInfo poolInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
-        .maxSets = static_cast<uint32_t>(NUM_FRAMES),
-        .poolSizeCount = 1,
-        .pPoolSizes = &poolSize
+        .maxSets = NUM_MATERIALS_MAX + NUM_FRAMES,
+        .poolSizeCount = 2,
+        .pPoolSizes = poolSizes.data()
     };
 
     VK_Check(vkCreateDescriptorPool(device, &poolInfo, nullptr, &globalDescriptorPool));
@@ -1166,13 +1211,17 @@ void RenderEngine::initGraphicsPipeline()
         .size = static_cast<uint32_t>(sizeof(PushConstants))
     };
 
-    // make basic pipeline layout with push constants
+    // make basic pipeline layout with push constants and descriptors
+    std::array<VkDescriptorSetLayout, 2> descriptorSetLayouts;
+    descriptorSetLayouts[0] = globalSceneDataLayout;
+    descriptorSetLayouts[1] = materialLayout;
+
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layoutInfo.pNext = nullptr;
     layoutInfo.flags = 0;
-    layoutInfo.setLayoutCount = 1;
-    layoutInfo.pSetLayouts = &globalSceneDataLayout;
+    layoutInfo.setLayoutCount = static_cast<uint32_t>(descriptorSetLayouts.size());
+    layoutInfo.pSetLayouts = descriptorSetLayouts.data();
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &pushConstants;
 
@@ -1341,6 +1390,62 @@ struct ScopedGLTFData
     }
 };
 
+void RenderEngine::initMaterialDescriptor(Material& material)
+{
+    // allocate descriptor set
+    VkDescriptorSetAllocateInfo allocInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .pNext = nullptr,
+        .descriptorPool = globalDescriptorPool,
+        .descriptorSetCount = 1
+    };
+
+    VK_Check(vkAllocateDescriptorSets(device, &allocInfo, &material.descriptorSet));
+
+    // write to descriptor set
+    VkDescriptorImageInfo baseColorInfo{
+        .sampler = material.baseColorTex.sampler,
+        .imageView = material.baseColorTex.view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    };
+
+    VkDescriptorImageInfo metalRoughInfo{
+        .sampler = material.metalRoughTex.sampler,
+        .imageView = material.metalRoughTex.view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    };
+
+    std::array<VkWriteDescriptorSet, 2> writeSets;
+
+    writeSets[0] = VkWriteDescriptorSet{
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .pNext = nullptr,
+        .dstSet = material.descriptorSet,
+        .dstBinding = 0,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .pImageInfo = &baseColorInfo,
+        .pBufferInfo = nullptr,
+        .pTexelBufferView = nullptr
+    };
+
+    writeSets[1] = VkWriteDescriptorSet{
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .pNext = nullptr,
+        .dstSet = material.descriptorSet,
+        .dstBinding = 1,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .pImageInfo = &metalRoughInfo,
+        .pBufferInfo = nullptr,
+        .pTexelBufferView = nullptr
+    };
+
+    vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeSets.size()), writeSets.data(), 0, nullptr);
+}
+
 Texture RenderEngine::loadTexture(cgltf_texture* texture)
 {
     Texture resultTex;
@@ -1504,10 +1609,10 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
                 cgltf_pbr_metallic_roughness& pbrMetalRough 
                     = surface->material->pbr_metallic_roughness;
 
-                newSurface.material.baseColorFactor 
+                newSurface.material.constants.baseColorFactor 
                     = glm::make_vec4(pbrMetalRough.base_color_factor);
-                newSurface.material.metalnessFactor = pbrMetalRough.metallic_factor;
-                newSurface.material.roughnessFactor = pbrMetalRough.roughness_factor;
+                newSurface.material.constants.metalnessFactor = pbrMetalRough.metallic_factor;
+                newSurface.material.constants.roughnessFactor = pbrMetalRough.roughness_factor;
 
                 // load base color texture
                 if (pbrMetalRough.base_color_texture.texture)
@@ -1525,6 +1630,8 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
                     );
                 }
             }
+
+            initMaterialDescriptor(newSurface.material);
         }
 
         // load index buffer

@@ -17,7 +17,13 @@ struct GlobalSceneData
 [[vk::binding(0, 0)]]
 ConstantBuffer<GlobalSceneData> globalSceneData : register(b0);
 
-struct Material
+struct MaterialTextures
+{
+    [[vk::binding(0, 1)]] Texture2D baseColor : register(t0);
+    [[vk::binding(1, 1)]] Texture2D metalRough : register(s0);
+};
+
+struct MaterialConstants
 {
     float4 baseColorFactor;
     float baseMetalnessFactor;
@@ -27,7 +33,7 @@ struct Material
 struct PushConstants
 {
     float4x4 model;
-    Material material;
+    MaterialConstants material;
 };
 
 [[vk::push_constant]]
