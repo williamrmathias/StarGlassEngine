@@ -131,30 +131,8 @@ struct PushConstants
 class RenderEngine
 {
 public:
-    VkInstance instance;
-    VkDebugUtilsMessengerEXT debugMessenger;
-
-    VkPhysicalDevice physicalDevice;
-    VkDevice device;
-
-    VmaAllocator allocator;
-
-    struct QueueFamilyIndices
-    {
-        uint32_t graphicsFamily;
-    };
-    QueueFamilyIndices queueFamilyIndices;
-    VkQueue graphicsQueue;
-
     VkCommandPool immediateCommandPool;
     VkCommandBuffer immediateCommandBuffer;
-
-    VkSurfaceKHR surface;
-    VkSwapchainKHR swapchain;
-    std::vector<VkImage> swapchainImages;
-    std::vector<VkImageView> swapchainImageViews;
-    VkFormat swapchainFormat;
-    VkExtent2D swapchainExtent;
 
     VkImage depthImage;
     VmaAllocation depthAlloc;
@@ -199,11 +177,6 @@ public:
     void cleanup();
 
 private:
-    void initInstance(std::vector<const char*>& extensions);
-    void initPhysicalDevice();
-    void initDevice();
-    void initVmaAllocator();
-    void initSwapchain();
     void initDepth();
     void initDescriptorPool();
     void initImmediateStructures();
