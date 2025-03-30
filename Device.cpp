@@ -201,7 +201,7 @@ static bool isPhysicalDeviceValid(
 
 static VkPhysicalDevice initPhysicalDevice(const Device& device)
 {
-    VkPhysicalDevice physicalDevice;
+    VkPhysicalDevice physicalDeviceRes = VK_NULL_HANDLE;
 
     uint32_t physicalDeviceCount;
     VK_Check(vkEnumeratePhysicalDevices(device.instance, &physicalDeviceCount, nullptr));
@@ -216,7 +216,7 @@ static VkPhysicalDevice initPhysicalDevice(const Device& device)
     {
         if (isPhysicalDeviceValid(device, physicalDevice, &deviceProperties, config.deviceExtensions))
         {
-            physicalDevice = physicalDevice;
+            physicalDeviceRes = physicalDevice;
             physicalDeviceChosen = true;
             break;
         }
@@ -228,7 +228,7 @@ static VkPhysicalDevice initPhysicalDevice(const Device& device)
         std::abort();
     }
 
-    return physicalDevice;
+    return physicalDeviceRes;
 }
 
 static VkDevice initLogicalDevice(
@@ -489,6 +489,16 @@ void cleanupDevice(Device* device)
 #endif
 
     vkDestroyInstance(device->instance, nullptr);
+}
+
+Device::Device(SDL_Window* window)
+{
+    *this = createDevice(window);
+}
+
+Device::~Device()
+{
+    cleanupDevice(this);
 }
 
 } // namespace gfx

@@ -1,5 +1,8 @@
 #pragma once
 
+// sge
+#include "Device.h"
+
 // Tell SDL not to mess with main()
 #define SDL_MAIN_HANDLED
 
@@ -59,7 +62,7 @@ struct Texture
     VkSampler sampler;
     VkImageView view;
 
-    void cleanup(VkDevice device, VmaAllocator allocator);
+    void cleanup(gfx::Device* device);
 };
 
 struct MaterialConstants
@@ -78,7 +81,7 @@ struct Material
 
     VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
 
-    void cleanup(VkDevice device, VmaAllocator allocator);
+    void cleanup(gfx::Device* device);
 };
 
 struct MeshSurface
@@ -102,7 +105,7 @@ struct StaticMesh
 {
     std::vector<MeshSurface> surfaces;
 
-    void cleanup(VkDevice device, VmaAllocator allocator);
+    void cleanup(gfx::Device* device);
 };
 
 struct GlobalSceneData
@@ -131,6 +134,9 @@ struct PushConstants
 class RenderEngine
 {
 public:
+
+    std::unique_ptr<gfx::Device> device;
+
     VkCommandPool immediateCommandPool;
     VkCommandBuffer immediateCommandBuffer;
 
@@ -159,7 +165,7 @@ public:
 
         VkDescriptorSet descriptorSet;
 
-        void cleanup(VkDevice device, VmaAllocator allocator);
+        void cleanup(gfx::Device* device);
     };
     FrameData frames[NUM_FRAMES];
     size_t currentFrameNumber = 0;
@@ -184,8 +190,6 @@ private:
     void initGeometryBuffers();
     void initGraphicsPipeline();
 
-    bool containsExtensions(std::span<const char* const> extensionsRequired, std::span<VkExtensionProperties> extensionsAvailable);
-    bool isPhysicalDeviceValid(VkPhysicalDevice device, VkPhysicalDeviceProperties2* deviceProperties);
     FrameData& getCurrentFrameData();
     void incrementFrameData();
     VkShaderModule loadShaderModule(const char* shaderPath);

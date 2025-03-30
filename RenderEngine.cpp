@@ -57,6 +57,8 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
 
 void RenderEngine::init(SDL_Window* window)
 {
+    device = std::make_unique<gfx::Device>(window);
+
     initDepth();
 
     initDescriptorPool();
@@ -118,15 +120,15 @@ void RenderEngine::render()
 
     // wait for previous frame to finish
     VK_Check(vkWaitForFences(
-        device, 1, &frame.renderFence, VK_TRUE, 1'000'000'000));
+        device->device, 1, &frame.renderFence, VK_TRUE, 1'000'000'000));
 
     // acquire image to draw to
     uint32_t swapchainIdx;
     VK_Check(vkAcquireNextImageKHR(
-        device, swapchain, 1'000'000'000, frame.renderSemaphore,
+        device->device, device->swapchain.swapchain, 1'000'000'000, frame.renderSemaphore,
         VK_NULL_HANDLE, &swapchainIdx));
 
-    VK_Check(vkResetFences(device, 1, &frame.renderFence));
+    VK_Check(vkResetFences(device->device, 1, &frame.renderFence));
 
     // reset command pool
     VkCommandBuffer cmd = frame.commandBuffer;
@@ -143,7 +145,7 @@ void RenderEngine::render()
 
     // transition swapchain image to color attachment layout
     transitionImageLayout(
-        cmd, swapchainImages[swapchainIdx],
+        cmd, device->swapchain.swapchainImages[swapchainIdx],
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 
         VK_ACCESS_2_NONE, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
@@ -175,7 +177,7 @@ void RenderEngine::render()
 
     // copy to uniform buffer
     vmaCopyMemoryToAllocation(
-        allocator, &globalSceneData, frame.uniformAlloc, 
+        device->allocator, &globalSceneData, frame.uniformAlloc, 
         0, static_cast<VkDeviceSize>(sizeof(globalSceneData))
     );
 
@@ -188,7 +190,7 @@ void RenderEngine::render()
     VkRenderingAttachmentInfo colorAttachInfo{};
     colorAttachInfo.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     colorAttachInfo.pNext = nullptr;
-    colorAttachInfo.imageView = swapchainImageViews[swapchainIdx];
+    colorAttachInfo.imageView = device->swapchain.swapchainImageViews[swapchainIdx];
     colorAttachInfo.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     colorAttachInfo.resolveMode = VK_RESOLVE_MODE_NONE;
     colorAttachInfo.resolveImageView = VK_NULL_HANDLE;
@@ -215,7 +217,7 @@ void RenderEngine::render()
     renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     renderInfo.pNext = nullptr;
     renderInfo.flags = 0;
-    renderInfo.renderArea = VkRect2D{ VkOffset2D{0, 0}, swapchainExtent};
+    renderInfo.renderArea = VkRect2D{ VkOffset2D{0, 0}, device->swapchain.swapchainExtent};
     renderInfo.layerCount = 1;
     renderInfo.viewMask = 0;
     renderInfo.colorAttachmentCount = 1;
@@ -229,15 +231,15 @@ void RenderEngine::render()
     VkViewport viewport{};
     viewport.x = 0.f;
     viewport.y = 0.f;
-    viewport.width = static_cast<float>(swapchainExtent.width);
-    viewport.height = static_cast<float>(swapchainExtent.height);
+    viewport.width = static_cast<float>(device->swapchain.swapchainExtent.width);
+    viewport.height = static_cast<float>(device->swapchain.swapchainExtent.height);
     viewport.minDepth = 0.f;
     viewport.maxDepth = 1.f;
     vkCmdSetViewport(cmd, 0, 1, &viewport);
 
     VkRect2D scissor{};
     scissor.offset = VkOffset2D{ 0, 0 };
-    scissor.extent = swapchainExtent;
+    scissor.extent = device->swapchain.swapchainExtent;
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     // bind pipeline
@@ -295,7 +297,7 @@ void RenderEngine::render()
 
     // transition swapchain image to presentable layout
     transitionImageLayout(
-        cmd, swapchainImages[swapchainIdx],
+        cmd, device->swapchain.swapchainImages[swapchainIdx],
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, 0,
@@ -339,7 +341,7 @@ void RenderEngine::render()
     submitInfo.signalSemaphoreInfoCount = 1;
     submitInfo.pSignalSemaphoreInfos = &signalInfo;
 
-    VK_Check(vkQueueSubmit2(graphicsQueue, 1, &submitInfo, frame.renderFence));
+    VK_Check(vkQueueSubmit2(device->graphicsQueue, 1, &submitInfo, frame.renderFence));
 
     // present to swapchain
     VkPresentInfoKHR presentInfo{};
@@ -348,73 +350,75 @@ void RenderEngine::render()
     presentInfo.waitSemaphoreCount = 1;
     presentInfo.pWaitSemaphores = &frame.swapchainSemaphore;
     presentInfo.swapchainCount = 1;
-    presentInfo.pSwapchains = &swapchain;
+    presentInfo.pSwapchains = &device->swapchain.swapchain;
     presentInfo.pImageIndices = &swapchainIdx;
     presentInfo.pResults = nullptr;
 
-    VK_Check(vkQueuePresentKHR(graphicsQueue, &presentInfo));
+    VK_Check(vkQueuePresentKHR(device->graphicsQueue, &presentInfo));
 
     // update frame
     incrementFrameData();
 }
 
-void RenderEngine::FrameData::cleanup(VkDevice device, VmaAllocator allocator)
+void RenderEngine::FrameData::cleanup(gfx::Device* device)
 {
-    vkDestroySemaphore(device, swapchainSemaphore, nullptr);
-    vkDestroySemaphore(device, renderSemaphore, nullptr);
+    vkDestroySemaphore(device->device, swapchainSemaphore, nullptr);
+    vkDestroySemaphore(device->device, renderSemaphore, nullptr);
 
-    vkDestroyFence(device, renderFence, nullptr);
+    vkDestroyFence(device->device, renderFence, nullptr);
 
-    vkDestroyCommandPool(device, commandPool, nullptr);
+    vkDestroyCommandPool(device->device, commandPool, nullptr);
 
-    vmaDestroyBuffer(allocator, uniformBuffer, uniformAlloc);
+    vmaDestroyBuffer(device->allocator, uniformBuffer, uniformAlloc);
 }
 
-void Texture::cleanup(VkDevice device, VmaAllocator allocator)
+void Texture::cleanup(gfx::Device* device)
 {
-    vmaDestroyImage(allocator, image, alloc);
-    vkDestroyImageView(device, view, nullptr);
-    vkDestroySampler(device, sampler, nullptr);
+    vmaDestroyImage(device->allocator, image, alloc);
+    vkDestroyImageView(device->device, view, nullptr);
+    vkDestroySampler(device->device, sampler, nullptr);
 }
 
-void Material::cleanup(VkDevice device, VmaAllocator allocator)
+void Material::cleanup(gfx::Device* device)
 {
-    baseColorTex.cleanup(device, allocator);
-    metalRoughTex.cleanup(device, allocator);
+    baseColorTex.cleanup(device);
+    metalRoughTex.cleanup(device);
 }
 
-void StaticMesh::cleanup(VkDevice device, VmaAllocator allocator)
+void StaticMesh::cleanup(gfx::Device* device)
 {
     for (MeshSurface& surface : surfaces)
     {
-        vmaDestroyBuffer(allocator, surface.indexBuffer, surface.indexAlloc);
-        vmaDestroyBuffer(allocator, surface.vertexBuffer, surface.vertexAlloc);
+        vmaDestroyBuffer(device->allocator, surface.indexBuffer, surface.indexAlloc);
+        vmaDestroyBuffer(device->allocator, surface.vertexBuffer, surface.vertexAlloc);
 
-        surface.material.cleanup(device, allocator);
+        surface.material.cleanup(device);
     }
 }
 
 void RenderEngine::cleanup()
 {
-    vkDeviceWaitIdle(device);
+    vkDeviceWaitIdle(device->device);
 
-    vkDestroyCommandPool(device, immediateCommandPool, nullptr);
+    vkDestroyCommandPool(device->device, immediateCommandPool, nullptr);
 
     for (FrameData& frame : frames)
-        frame.cleanup(device, allocator);
+        frame.cleanup(device.get());
 
-    vkDestroyDescriptorPool(device, globalDescriptorPool, nullptr);
-    vkDestroyDescriptorSetLayout(device, globalSceneDataLayout, nullptr);
-    vkDestroyDescriptorSetLayout(device, materialLayout, nullptr);
+    vkDestroyDescriptorPool(device->device, globalDescriptorPool, nullptr);
+    vkDestroyDescriptorSetLayout(device->device, globalSceneDataLayout, nullptr);
+    vkDestroyDescriptorSetLayout(device->device, materialLayout, nullptr);
 
-    vkDestroyPipelineLayout(device, graphicsPipelineLayout, nullptr);
-    vkDestroyPipeline(device, graphicsPipeline, nullptr);
+    vkDestroyPipelineLayout(device->device, graphicsPipelineLayout, nullptr);
+    vkDestroyPipeline(device->device, graphicsPipeline, nullptr);
 
-    vmaDestroyImage(allocator, depthImage, depthAlloc);
-    vkDestroyImageView(device, depthView, nullptr);
+    vmaDestroyImage(device->allocator, depthImage, depthAlloc);
+    vkDestroyImageView(device->device, depthView, nullptr);
 
     if (staticMesh.has_value())
-        staticMesh.value().cleanup(device, allocator);
+        staticMesh.value().cleanup(device.get());
+
+    device.reset();
 }
 
 /*
@@ -638,7 +642,7 @@ void RenderEngine::initDepth()
 {
     // get depth format
     VkFormatProperties formatProps;
-    vkGetPhysicalDeviceFormatProperties(physicalDevice, depthFormat, &formatProps);
+    vkGetPhysicalDeviceFormatProperties(device->physicalDevice, depthFormat, &formatProps);
     bool supportsFormat = formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
     if (!supportsFormat)
     {
@@ -646,14 +650,20 @@ void RenderEngine::initDepth()
         std::abort();
     }
 
+    VkExtent3D depthExtent{
+        device->swapchain.swapchainExtent.width,
+        device->swapchain.swapchainExtent.height,
+        1
+    };
+
     createImage(
-        allocator, nullptr, 0, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 
-        depthFormat, VkExtent3D{ swapchainExtent.width, swapchainExtent.height, 1 }, 
+        device->allocator, nullptr, 0, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 
+        depthFormat, depthExtent,
         depthImage, depthAlloc
     );
 
     // create depth image view
-    depthView = createImageView(device, depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+    depthView = createImageView(device->device, depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
 }
 
 void RenderEngine::initDescriptorPool()
@@ -675,7 +685,7 @@ void RenderEngine::initDescriptorPool()
         .pBindings = &globalSceneBinding
     };
 
-    VK_Check(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &globalSceneDataLayout));
+    VK_Check(vkCreateDescriptorSetLayout(device->device, &layoutInfo, nullptr, &globalSceneDataLayout));
 
     // make material layout
     std::array<VkDescriptorSetLayoutBinding, 2> materialBindings;
@@ -706,7 +716,7 @@ void RenderEngine::initDescriptorPool()
         .pBindings = materialBindings.data()
     };
 
-    VK_Check(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &materialLayout));
+    VK_Check(vkCreateDescriptorSetLayout(device->device, &layoutInfo, nullptr, &materialLayout));
 
     // make descriptor pool
     std::array<VkDescriptorPoolSize, 2> poolSizes;
@@ -730,7 +740,7 @@ void RenderEngine::initDescriptorPool()
         .pPoolSizes = poolSizes.data()
     };
 
-    VK_Check(vkCreateDescriptorPool(device, &poolInfo, nullptr, &globalDescriptorPool));
+    VK_Check(vkCreateDescriptorPool(device->device, &poolInfo, nullptr, &globalDescriptorPool));
 }
 
 void RenderEngine::initImmediateStructures()
@@ -740,8 +750,8 @@ void RenderEngine::initImmediateStructures()
     poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     poolInfo.pNext = nullptr;
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily;
-    VK_Check(vkCreateCommandPool(device, &poolInfo, nullptr, &immediateCommandPool)); 
+    poolInfo.queueFamilyIndex = device->queueFamilyIndices.graphicsFamily;
+    VK_Check(vkCreateCommandPool(device->device, &poolInfo, nullptr, &immediateCommandPool)); 
 
     // create command buffers
     VkCommandBufferAllocateInfo allocInfo{};
@@ -750,7 +760,7 @@ void RenderEngine::initImmediateStructures()
     allocInfo.commandPool = immediateCommandPool;
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     allocInfo.commandBufferCount = 1;
-    VK_Check(vkAllocateCommandBuffers(device, &allocInfo, &immediateCommandBuffer));
+    VK_Check(vkAllocateCommandBuffers(device->device, &allocInfo, &immediateCommandBuffer));
 }
 
 void RenderEngine::initFrameData()
@@ -760,9 +770,9 @@ void RenderEngine::initFrameData()
     poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     poolInfo.pNext = nullptr;
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily;
+    poolInfo.queueFamilyIndex = device->queueFamilyIndices.graphicsFamily;
     for (size_t i = 0; i < NUM_FRAMES; i++)
-        VK_Check(vkCreateCommandPool(device, &poolInfo, nullptr, &frames[i].commandPool));
+        VK_Check(vkCreateCommandPool(device->device, &poolInfo, nullptr, &frames[i].commandPool));
 
     // create command buffers
     VkCommandBufferAllocateInfo allocInfo{};
@@ -773,7 +783,7 @@ void RenderEngine::initFrameData()
     for (size_t i = 0; i < NUM_FRAMES; i++)
     {
         allocInfo.commandPool = frames[i].commandPool;
-        VK_Check(vkAllocateCommandBuffers(device, &allocInfo, &frames[i].commandBuffer));
+        VK_Check(vkAllocateCommandBuffers(device->device, &allocInfo, &frames[i].commandBuffer));
     }
 
     // create sync structures
@@ -789,16 +799,16 @@ void RenderEngine::initFrameData()
 
     for (size_t i = 0; i < NUM_FRAMES; i++)
     {
-        VK_Check(vkCreateSemaphore(device, &semInfo, nullptr, &frames[i].swapchainSemaphore));
-        VK_Check(vkCreateSemaphore(device, &semInfo, nullptr, &frames[i].renderSemaphore));
-        VK_Check(vkCreateFence(device, &fenceInfo, nullptr, &frames[i].renderFence));
+        VK_Check(vkCreateSemaphore(device->device, &semInfo, nullptr, &frames[i].swapchainSemaphore));
+        VK_Check(vkCreateSemaphore(device->device, &semInfo, nullptr, &frames[i].renderSemaphore));
+        VK_Check(vkCreateFence(device->device, &fenceInfo, nullptr, &frames[i].renderFence));
     }
 
     // create uniform buffers + descriptor sets
     for (size_t i = 0; i < NUM_FRAMES; i++)
     {
         createBuffer(
-            allocator, nullptr, sizeof(globalSceneData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            device->allocator, nullptr, sizeof(globalSceneData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
             frames[i].uniformBuffer, frames[i].uniformAlloc
         );
     }
@@ -815,7 +825,7 @@ void RenderEngine::initFrameData()
         .pSetLayouts = layouts.data()
     };
 
-    VK_Check(vkAllocateDescriptorSets(device, &descriptorInfo, descriptorSets.data()));
+    VK_Check(vkAllocateDescriptorSets(device->device, &descriptorInfo, descriptorSets.data()));
     for (size_t i = 0; i < NUM_FRAMES; i++)
         frames[i].descriptorSet = descriptorSets[i];
 
@@ -841,7 +851,7 @@ void RenderEngine::initFrameData()
             .pTexelBufferView = nullptr
         };
 
-        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+        vkUpdateDescriptorSets(device->device, 1, &write, 0, nullptr);
     }
 }
 
@@ -1014,7 +1024,7 @@ void RenderEngine::initGraphicsPipeline()
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &pushConstants;
 
-    VK_Check(vkCreatePipelineLayout(device, &layoutInfo, nullptr, &graphicsPipelineLayout));
+    VK_Check(vkCreatePipelineLayout(device->device, &layoutInfo, nullptr, &graphicsPipelineLayout));
 
     // rendering create info
     VkPipelineRenderingCreateInfo renderInfo{};
@@ -1022,7 +1032,7 @@ void RenderEngine::initGraphicsPipeline()
     renderInfo.pNext = nullptr;
     renderInfo.viewMask = 0;
     renderInfo.colorAttachmentCount = 1;
-    renderInfo.pColorAttachmentFormats = &swapchainFormat;
+    renderInfo.pColorAttachmentFormats = &device->swapchain.swapchainFormat;
     renderInfo.depthAttachmentFormat = depthFormat;
     renderInfo.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
 
@@ -1049,74 +1059,11 @@ void RenderEngine::initGraphicsPipeline()
     pipelineInfo.basePipelineIndex = 0;
 
     VK_Check(vkCreateGraphicsPipelines(
-        device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline));
+        device->device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline));
 
     // Shader modules can be destroyed after the pipeline is created
-    vkDestroyShaderModule(device, vertShader, nullptr);
-    vkDestroyShaderModule(device, fragShader, nullptr);
-}
-
-bool RenderEngine::containsExtensions(
-    std::span<const char* const> extensionsRequired, std::span<VkExtensionProperties> extensionsAvailable)
-{
-    for (const char* extensionReq : extensionsRequired)
-    {
-        bool extensionFound = false;
-        for (const VkExtensionProperties& extensionProp : extensionsAvailable)
-        {
-            if (strcmp(extensionReq, extensionProp.extensionName) == 0)
-            {
-                extensionFound = true;
-                break;
-            }
-        }
-
-        if (!extensionFound) { return false; }
-    }
-
-    return true;
-}
-
-bool RenderEngine::isPhysicalDeviceValid(
-    VkPhysicalDevice device,
-    VkPhysicalDeviceProperties2* deviceProperties)
-{
-    vkGetPhysicalDeviceProperties2(device, deviceProperties);
-
-    if (deviceProperties->properties.apiVersion < vkApiVersion) return false;
-
-    // query device extensions
-    uint32_t extensionCount = 0;
-    vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, nullptr);
-    std::vector<VkExtensionProperties> extensions(extensionCount);
-    vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, extensions.data());
-
-    if (!containsExtensions(deviceExtensions, extensions)) { return false; }
-
-    uint32_t queueFamilyCount;
-    vkGetPhysicalDeviceQueueFamilyProperties2(device, &queueFamilyCount, nullptr);
-
-    std::vector<VkQueueFamilyProperties2> queueFamilies(queueFamilyCount, { VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2 });
-    vkGetPhysicalDeviceQueueFamilyProperties2(device, &queueFamilyCount, queueFamilies.data());
-
-    bool graphicsFamilyFound = false;
-    VkBool32 presentSupport = VK_FALSE; // use graphics queue to present
-    for (uint32_t family = 0; family < queueFamilyCount; family++)
-    {
-        vkGetPhysicalDeviceSurfaceSupportKHR(device, family, surface, &presentSupport);
-
-        if (!graphicsFamilyFound &&
-            queueFamilies[family].queueFamilyProperties.queueFlags | VK_QUEUE_GRAPHICS_BIT &&
-            presentSupport == VK_TRUE)
-        {
-            queueFamilyIndices.graphicsFamily = family;
-            graphicsFamilyFound = true;
-        }
-
-        if (graphicsFamilyFound) break;
-    }
-
-    return graphicsFamilyFound;
+    vkDestroyShaderModule(device->device, vertShader, nullptr);
+    vkDestroyShaderModule(device->device, fragShader, nullptr);
 }
 
 RenderEngine::FrameData& RenderEngine::getCurrentFrameData()
@@ -1162,7 +1109,7 @@ VkShaderModule RenderEngine::loadShaderModule(const char* shaderPath)
     createInfo.pCode = reinterpret_cast<uint32_t*>(shaderCode.data());
 
     VkShaderModule resultShader;
-    VK_Check(vkCreateShaderModule(device, &createInfo, nullptr, &resultShader));
+    VK_Check(vkCreateShaderModule(device->device, &createInfo, nullptr, &resultShader));
 
     return resultShader;
 }
@@ -1190,7 +1137,7 @@ void RenderEngine::initMaterialDescriptor(Material& material)
         .pSetLayouts = &materialLayout
     };
 
-    VK_Check(vkAllocateDescriptorSets(device, &allocInfo, &material.descriptorSet));
+    VK_Check(vkAllocateDescriptorSets(device->device, &allocInfo, &material.descriptorSet));
 
     // write to descriptor set
     VkDescriptorImageInfo baseColorInfo{
@@ -1233,7 +1180,7 @@ void RenderEngine::initMaterialDescriptor(Material& material)
         .pTexelBufferView = nullptr
     };
 
-    vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeSets.size()), writeSets.data(), 0, nullptr);
+    vkUpdateDescriptorSets(device->device, static_cast<uint32_t>(writeSets.size()), writeSets.data(), 0, nullptr);
 }
 
 // returns a blank white 1x1 texture
@@ -1243,21 +1190,21 @@ Texture RenderEngine::loadWhiteTexture()
 
     uint32_t white = glm::packUnorm4x8(glm::vec4(1.f, 1.f, 1.f, 1.f));
     createImage(
-        allocator, &white,
+        device->allocator, &white,
         static_cast<VkDeviceSize>(1 * 1 * STBI_rgb_alpha),
         VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R8G8B8A8_UNORM,
         VkExtent3D{1,1,1},
         whiteTex.image, whiteTex.alloc,
-        immediateCommandBuffer, graphicsQueue
+        immediateCommandBuffer, device->graphicsQueue
     );
 
     whiteTex.view = createImageView(
-        device, whiteTex.image,
+        device->device, whiteTex.image,
         VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT
     );
 
     whiteTex.sampler = createSampler(
-        device, VK_FILTER_NEAREST, VK_FILTER_NEAREST,
+        device->device, VK_FILTER_NEAREST, VK_FILTER_NEAREST,
         VK_SAMPLER_ADDRESS_MODE_REPEAT, VK_SAMPLER_ADDRESS_MODE_REPEAT
     );
 
@@ -1280,16 +1227,16 @@ Texture RenderEngine::loadTexture(cgltf_texture* texture)
     );
 
     createImage(
-        allocator, imageData,
+        device->allocator, imageData,
         static_cast<VkDeviceSize>(width * height * STBI_rgb_alpha),
         VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R8G8B8A8_UNORM,
         VkExtent3D{ static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1 },
         resultTex.image, resultTex.alloc,
-        immediateCommandBuffer, graphicsQueue
+        immediateCommandBuffer, device->graphicsQueue
     );
 
     resultTex.view = createImageView(
-        device, resultTex.image,
+        device->device, resultTex.image,
         VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT
     );
 
@@ -1352,7 +1299,7 @@ Texture RenderEngine::loadTexture(cgltf_texture* texture)
     }
 
     resultTex.sampler = createSampler(
-        device, magFilter, minFilter, uWrap, vWrap
+        device->device, magFilter, minFilter, uWrap, vWrap
     );
 
     return resultTex;
@@ -1501,7 +1448,7 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
             newSurface.indexCount = static_cast<uint32_t>(indexCount);
             // create and upload gpu buffer
             createBuffer(
-                allocator, indexData.data(), static_cast<VkDeviceSize>(outComponentSize * indexCount),
+                device->allocator, indexData.data(), static_cast<VkDeviceSize>(outComponentSize * indexCount),
                 VK_BUFFER_USAGE_INDEX_BUFFER_BIT, 
                 newSurface.indexBuffer, newSurface.indexAlloc
             );
@@ -1604,7 +1551,7 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
             newSurface.vertexCount = static_cast<uint32_t>(vertexCount);
             // create and upload gpu buffer
             createBuffer(
-                allocator, vertexData.data(),
+                device->allocator, vertexData.data(),
                 static_cast<VkDeviceSize>(sizeof(vertexData[0]) * vertexCount),
                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 newSurface.vertexBuffer, newSurface.vertexAlloc

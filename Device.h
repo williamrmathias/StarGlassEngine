@@ -8,6 +8,8 @@
 #include <vma/vk_mem_alloc.h>
 
 // SDL
+// Tell SDL not to mess with main()
+#define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
 
 // stl
@@ -32,9 +34,9 @@ static const VulkanConfig config;
 
 struct Device
 {
-    Device() = delete;
-    Device(SDL_Window* window) { *this = createDevice(window); }
-    ~Device() { cleanupDevice(this); }
+    Device() = default;
+    Device(SDL_Window* window);
+    ~Device();
 
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
@@ -44,7 +46,7 @@ struct Device
 
     VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
 
-    VmaAllocator allocator = VMA_NULL;
+    VmaAllocator allocator = 0;
 
     struct QueueFamilyIndices
     {
