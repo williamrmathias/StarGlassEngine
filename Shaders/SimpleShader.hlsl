@@ -74,8 +74,7 @@ VertexOutput simpleVS(VertexInput input)
     output.position = mul(mvp, float4(input.position, 1.f));
     output.positionWorld = mul(pushConstants.model, float4(input.position, 1.f)).xyz;
     
-    // assume model matrix is orthogonal
-    output.normal = mul(pushConstants.model, float4(input.normal, 1.f)).xyz;
+    output.normal = mul(pushConstants.model, float4(input.normal, 0.f)).xyz;
     output.uv = input.uv;
     output.color = input.color;
     return output;
@@ -87,7 +86,7 @@ float heaviside(float x)
 }
 
 // Schlick's approximation to the Fresnel term
-float schlicks(float f0, float VdotH)
+float3 schlicks(float3 f0, float VdotH)
 {
     float vdoth2 = VdotH * VdotH;
     return f0 + (1 - f0) * abs(vdoth2 * vdoth2 * VdotH);
@@ -100,19 +99,19 @@ float specularBRDF(float alpha, float3 viewDir, float3 lightDir, float3 normal, 
     float alpha2 = alpha * alpha;
     float oneMinusAlpha2 = 1.f - alpha2;
     
+    // Trowbridge-Reitz microfacet distribution term
     float NdotH = dot(normal, halfway);
     float x = (NdotH * NdotH) * (-oneMinusAlpha2) + 1.f;
-    
     float D = (alpha2 * heaviside(NdotH)) / (PI * x * x);
     
+    // light visibility term
     float NdotL = dot(normal, lightDir);
     float HdotL = dot(halfway, lightDir);
-    
     float vL = heaviside(HdotL) / (abs(NdotL) + sqrt(alpha2 + oneMinusAlpha2 * (NdotL * NdotL)));
     
+    // view visibility term
     float NdotV = dot(normal, viewDir);
     float HdotV = dot(halfway, viewDir);
-    
     float vV = heaviside(HdotV) / (abs(NdotV) + sqrt(alpha2 + oneMinusAlpha2 * (NdotV * NdotV)));
     
     return vV * vL * D;
@@ -142,12 +141,11 @@ PixelOutput simplePS(VertexOutput input)
     float3 normal = normalize(input.normal);
     float3 halfway = normalize(viewDirection + lightDirection);
     
-    float fresnelFactor = schlicks(F0, dot(viewDirection, halfway));
+    float3 fresnel = schlicks(F0, dot(viewDirection, halfway));
     
-    result.color = float4(lerp(
-        diffuseBRDF(baseColor.rgb) * globalSceneData.lightColor,
-        specularBRDF(rough2, viewDirection, lightDirection, normal, halfway) * globalSceneData.lightColor,
-        fresnelFactor
-    ), 1.f);
+    float3 diffuse = diffuseBRDF(baseColor.rgb);
+    float3 specular = specularBRDF(rough2, viewDirection, lightDirection, normal, halfway) * globalSceneData.lightColor;
+    
+    result.color = float4(lerp(diffuse, specular, fresnel), 1.f);
     return result;
 }

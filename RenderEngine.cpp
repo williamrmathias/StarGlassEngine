@@ -178,15 +178,15 @@ void RenderEngine::render()
 
     // update constants
     glm::mat4 view = 
-        glm::lookAt(glm::vec3(1.f, 2.f, 5.f), glm::vec3(0.f, 0.f, 0.f), glm::vec3(0, 1, 0));
+        glm::lookAt(glm::vec3(0.f, 1.f, 0.f), glm::vec3(0.f, 0.f, 3.f), glm::vec3(0, 1.f, 0));
 
     glm::mat4 projection = glm::perspective(glm::radians(45.f), 1280.f / 720.f, 0.1f, 100.f);
     projection[1][1] *= -1; // correct gl -> vk
 
     globalSceneData = GlobalSceneData{
         .viewproj = projection * view,
-        .viewPosition = glm::vec3{1.f, 2.f, 5.f},
-        .lightDirection = glm::vec3{0.f, 1.f, 0.5f},
+        .viewPosition = glm::vec3{0.f, 0.f, 0.f},
+        .lightDirection = glm::vec3{0.f, 1.f, 0.f},
         .lightColor = glm::vec3{1.f, 1.f, 1.f}
     };
 
@@ -280,7 +280,7 @@ void RenderEngine::render()
             // set push constants
             static float angle = 0.f;
             glm::mat4 model = glm::identity<glm::mat4>();
-            model = glm::translate(model, glm::vec3(0.f, 0.f, 1.f));
+            model = glm::translate(model, glm::vec3(0.f, 0.f, 3.f));
             model = glm::rotate(
                 model,
                 glm::radians(angle),
@@ -1633,7 +1633,11 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
 
         // load material
         {
-            newSurface.material = {};
+            newSurface.material = Material{
+                .baseColorFactor = glm::vec4{1.f, 1.f, 1.f, 1.f},
+                .baseMetalnessFactor = 0.f,
+                .baseRoughnessFactor = 1.f
+            };
             if (surface->material && surface->material->has_pbr_metallic_roughness)
             {
                 cgltf_pbr_metallic_roughness& pbrMetalRough 
