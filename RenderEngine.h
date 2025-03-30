@@ -213,6 +213,7 @@ private:
     void incrementFrameData();
     VkShaderModule loadShaderModule(const char* shaderPath);
     void initMaterialDescriptor(Material& material);
+    Texture loadWhiteTexture();
     Texture loadTexture(cgltf_texture* texture);
     std::optional<StaticMesh> loadStaticMesh(const char* meshPath);
 };

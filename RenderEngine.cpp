@@ -273,7 +273,7 @@ void RenderEngine::render()
 
             // bind material
             vkCmdBindDescriptorSets(
-                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout, 0, 1, 
+                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout, 1, 1, 
                 &surface.material.descriptorSet, 0, nullptr
             );
 
@@ -1397,7 +1397,8 @@ void RenderEngine::initMaterialDescriptor(Material& material)
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
         .pNext = nullptr,
         .descriptorPool = globalDescriptorPool,
-        .descriptorSetCount = 1
+        .descriptorSetCount = 1,
+        .pSetLayouts = &materialLayout
     };
 
     VK_Check(vkAllocateDescriptorSets(device, &allocInfo, &material.descriptorSet));
@@ -1446,16 +1447,45 @@ void RenderEngine::initMaterialDescriptor(Material& material)
     vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeSets.size()), writeSets.data(), 0, nullptr);
 }
 
+// returns a blank white 1x1 texture
+Texture RenderEngine::loadWhiteTexture()
+{
+    Texture whiteTex;
+
+    uint32_t white = glm::packUnorm4x8(glm::vec4(1.f, 1.f, 1.f, 1.f));
+    createImage(
+        allocator, &white,
+        static_cast<VkDeviceSize>(1 * 1 * STBI_rgb_alpha),
+        VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R8G8B8A8_UNORM,
+        VkExtent3D{1,1,1},
+        whiteTex.image, whiteTex.alloc
+    );
+
+    whiteTex.view = createImageView(
+        device, whiteTex.image,
+        VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT
+    );
+
+    whiteTex.sampler = createSampler(
+        device, VK_FILTER_NEAREST, VK_FILTER_NEAREST,
+        VK_SAMPLER_ADDRESS_MODE_REPEAT, VK_SAMPLER_ADDRESS_MODE_REPEAT
+    );
+
+    return whiteTex;
+}
+
 Texture RenderEngine::loadTexture(cgltf_texture* texture)
 {
     Texture resultTex;
 
     cgltf_image* image = texture->image;
-    const uint8_t* data = cgltf_buffer_view_data(image->buffer_view);
+    cgltf_buffer_view* bufferView = image->buffer_view;
+    cgltf_buffer* buffer = bufferView->buffer;
+    const uint8_t* data = static_cast<uint8_t*>(buffer->data) + bufferView->offset;
 
     int width, height, nChannels;
     stbi_uc* imageData = stbi_load_from_memory(
-        data, static_cast<int>(image->buffer_view->size),
+        data, static_cast<int>(bufferView->size),
         &width, &height, &nChannels, STBI_rgb_alpha
     );
 
@@ -1621,6 +1651,10 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
                         pbrMetalRough.base_color_texture.texture
                     );
                 }
+                else
+                {
+                    newSurface.material.baseColorTex = loadWhiteTexture();
+                }
 
                 // load metallic roughness texture
                 if (pbrMetalRough.metallic_roughness_texture.texture)
@@ -1628,6 +1662,10 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
                     newSurface.material.metalRoughTex = loadTexture(
                         pbrMetalRough.metallic_roughness_texture.texture
                     );
+                }
+                else
+                {
+                    newSurface.material.metalRoughTex = loadWhiteTexture();
                 }
             }
 
