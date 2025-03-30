@@ -17,7 +17,19 @@ struct GlobalSceneData
 [[vk::binding(0, 0)]]
 ConstantBuffer<GlobalSceneData> globalSceneData : register(b0);
 
-struct Material
+[[vk::binding(0, 1)]]
+Texture2D baseColorTex : register(t0);
+
+[[vk::binding(0, 1)]]
+SamplerState baseColorSampler : register(s0);
+
+[[vk::binding(1, 1)]]
+Texture2D metalRoughTex : register(t1);
+
+[[vk::binding(1, 1)]]
+SamplerState metalRoughSampler : register(s1);
+
+struct MaterialConstants
 {
     float4 baseColorFactor;
     float baseMetalnessFactor;
@@ -27,7 +39,7 @@ struct Material
 struct PushConstants
 {
     float4x4 model;
-    Material material;
+    MaterialConstants material;
 };
 
 [[vk::push_constant]]
@@ -46,6 +58,7 @@ struct VertexOutput
     float4 position : SV_Position;
     float3 positionWorld : TEXCOORD0;
     float3 normal : NORMAL0;
+    float2 uv : TEXCOORD1;
     float4 color : COLOR0;
 };
 
@@ -61,8 +74,8 @@ VertexOutput simpleVS(VertexInput input)
     output.position = mul(mvp, float4(input.position, 1.f));
     output.positionWorld = mul(pushConstants.model, float4(input.position, 1.f)).xyz;
     
-    // assume model matrix is orthogonal
     output.normal = mul(pushConstants.model, float4(input.normal, 0.f)).xyz;
+    output.uv = input.uv;
     output.color = input.color;
     return output;
 }
@@ -114,7 +127,13 @@ float3 diffuseBRDF(float3 color)
 PixelOutput simplePS(VertexOutput input)
 {
     PixelOutput result;
-    float4 baseColor = pushConstants.material.baseColorFactor * input.color;
+    
+    float4 baseColorSample = baseColorTex.Sample(baseColorSampler, input.uv);
+    float4 metalRoughSample = metalRoughTex.Sample(metalRoughSampler, input.uv);
+    
+    float4 baseColor = baseColorSample * pushConstants.material.baseColorFactor * input.color;
+    
+    float roughness = metalRoughSample.b * pushConstants.material.baseRoughnessFactor;
     float rough2 = pushConstants.material.baseRoughnessFactor * pushConstants.material.baseRoughnessFactor;
     
     float3 viewDirection = normalize(globalSceneData.viewPosition - input.positionWorld);

@@ -12,6 +12,9 @@
 #include <SDL2/SDL_vulkan.h>
 #include <SDL2/SDL_filesystem.h>
 
+// cgltf
+#include <cgltf.h>
+
 // VMA
 #include <vma/vk_mem_alloc.h>
 
@@ -35,6 +38,7 @@ static const std::array<const char*, 3> deviceExtensions = {
 static const uint32_t vkApiVersion = VK_API_VERSION_1_3;
 
 static const size_t NUM_FRAMES = 2;
+static const uint32_t NUM_MATERIALS_MAX = 10;
 
 struct Vertex
 {
@@ -47,21 +51,45 @@ struct Vertex
     static std::array<VkVertexInputAttributeDescription, 4> getInputAttributeDescription();
 };
 
-struct Material
+struct Texture
+{
+    VkImage image;
+    VmaAllocation alloc;
+
+    VkSampler sampler;
+    VkImageView view;
+
+    void cleanup(VkDevice device, VmaAllocator allocator);
+};
+
+struct MaterialConstants
 {
     glm::vec4 baseColorFactor;
-    float baseMetalnessFactor;
-    float baseRoughnessFactor;
+    float metalnessFactor;
+    float roughnessFactor;
+};
+
+struct Material
+{
+    MaterialConstants constants;
+
+    Texture baseColorTex;
+    Texture metalRoughTex;
+
+    VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+
+    void cleanup(VkDevice device, VmaAllocator allocator);
 };
 
 struct MeshSurface
 {
     VkBuffer vertexBuffer;
     VmaAllocation vertexAlloc;
-    uint32_t vertexCount;
 
     VkBuffer indexBuffer;
     VmaAllocation indexAlloc;
+
+    uint32_t vertexCount;
     uint32_t indexCount;
 
     VkPrimitiveTopology topology;
@@ -74,7 +102,7 @@ struct StaticMesh
 {
     std::vector<MeshSurface> surfaces;
 
-    void cleanup(VmaAllocator allocator);
+    void cleanup(VkDevice device, VmaAllocator allocator);
 };
 
 struct GlobalSceneData
@@ -91,10 +119,13 @@ struct GlobalSceneData
     float padding3;
 };
 
+// must be 128 bytes
 struct PushConstants
 {
     glm::mat4 model;
-    Material material;
+    MaterialConstants material;
+
+    float padding[10];
 };
 
 class RenderEngine
@@ -131,6 +162,7 @@ public:
 
     VkDescriptorPool globalDescriptorPool;
     VkDescriptorSetLayout globalSceneDataLayout;
+    VkDescriptorSetLayout materialLayout;
 
     struct FrameData
     {
@@ -180,6 +212,9 @@ private:
     FrameData& getCurrentFrameData();
     void incrementFrameData();
     VkShaderModule loadShaderModule(const char* shaderPath);
+    void initMaterialDescriptor(Material& material);
+    Texture loadWhiteTexture();
+    Texture loadTexture(cgltf_texture* texture);
     std::optional<StaticMesh> loadStaticMesh(const char* meshPath);
 };
 

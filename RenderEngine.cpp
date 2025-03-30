@@ -21,6 +21,10 @@
 #define CGLTF_IMPLEMENTATION
 #include <cgltf.h>
 
+// stb
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
 static inline void VK_Check(VkResult result)
 {
     if (result != VK_SUCCESS)
@@ -267,6 +271,12 @@ void RenderEngine::render()
             VkDeviceSize indexBufferOffset{ 0 };
             vkCmdBindIndexBuffer(cmd, surface.indexBuffer, indexBufferOffset, surface.indexType);
 
+            // bind material
+            vkCmdBindDescriptorSets(
+                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout, 1, 1, 
+                &surface.material.descriptorSet, 0, nullptr
+            );
+
             // set push constants
             static float angle = 0.f;
             glm::mat4 model = glm::identity<glm::mat4>();
@@ -279,7 +289,7 @@ void RenderEngine::render()
 
             PushConstants pushConstants{
                 .model = model,
-                .material = surface.material
+                .material = surface.material.constants
             };
 
             vkCmdPushConstants(
@@ -377,12 +387,27 @@ void RenderEngine::FrameData::cleanup(VkDevice device, VmaAllocator allocator)
     vmaDestroyBuffer(allocator, uniformBuffer, uniformAlloc);
 }
 
-void StaticMesh::cleanup(VmaAllocator allocator)
+void Texture::cleanup(VkDevice device, VmaAllocator allocator)
+{
+    vmaDestroyImage(allocator, image, alloc);
+    vkDestroyImageView(device, view, nullptr);
+    vkDestroySampler(device, sampler, nullptr);
+}
+
+void Material::cleanup(VkDevice device, VmaAllocator allocator)
+{
+    baseColorTex.cleanup(device, allocator);
+    metalRoughTex.cleanup(device, allocator);
+}
+
+void StaticMesh::cleanup(VkDevice device, VmaAllocator allocator)
 {
     for (MeshSurface& surface : surfaces)
     {
         vmaDestroyBuffer(allocator, surface.indexBuffer, surface.indexAlloc);
         vmaDestroyBuffer(allocator, surface.vertexBuffer, surface.vertexAlloc);
+
+        surface.material.cleanup(device, allocator);
     }
 }
 
@@ -395,6 +420,7 @@ void RenderEngine::cleanup()
 
     vkDestroyDescriptorPool(device, globalDescriptorPool, nullptr);
     vkDestroyDescriptorSetLayout(device, globalSceneDataLayout, nullptr);
+    vkDestroyDescriptorSetLayout(device, materialLayout, nullptr);
 
     vkDestroyPipelineLayout(device, graphicsPipelineLayout, nullptr);
     vkDestroyPipeline(device, graphicsPipeline, nullptr);
@@ -408,7 +434,7 @@ void RenderEngine::cleanup()
     vkDestroyImageView(device, depthView, nullptr);
 
     if (staticMesh.has_value())
-        staticMesh.value().cleanup(allocator);
+        staticMesh.value().cleanup(device, allocator);
 
     vmaDestroyAllocator(allocator);
 
@@ -701,110 +727,6 @@ void RenderEngine::initSwapchain()
     }
 }
 
-void RenderEngine::initDepth()
-{
-    // get depth format
-    VkFormatProperties formatProps;
-    vkGetPhysicalDeviceFormatProperties(physicalDevice, depthFormat, &formatProps);
-    bool supportsFormat = formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
-    if (!supportsFormat)
-    {
-        SDL_LogError(0, "Depth image error: format not supported by device\n");
-        std::abort();
-    }
-
-    // create image and allocation
-    VkImageCreateInfo imageInfo{
-        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .imageType = VK_IMAGE_TYPE_2D,
-        .format = depthFormat,
-        .extent = VkExtent3D{swapchainExtent.width, swapchainExtent.height, 1},
-        .mipLevels = 1,
-        .arrayLayers = 1,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
-        .tiling = VK_IMAGE_TILING_OPTIMAL,
-        .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-        .queueFamilyIndexCount = 0, // not sharing
-        .pQueueFamilyIndices = nullptr, // not sharing
-        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
-    };
-
-    VmaAllocationCreateInfo allocInfo{
-        .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
-        .usage = VMA_MEMORY_USAGE_AUTO,
-        .requiredFlags = 0,
-        .preferredFlags = 0,
-        .memoryTypeBits = 0,
-        .pool = VMA_NULL,
-        .pUserData = nullptr,
-        .priority = 0.f
-    };
-
-    VK_Check(vmaCreateImage(allocator, &imageInfo, &allocInfo, &depthImage, &depthAlloc, nullptr));
-
-    // create depth image view
-    VkImageViewCreateInfo viewInfo{
-        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .image = depthImage,
-        .viewType = VK_IMAGE_VIEW_TYPE_2D,
-        .format = depthFormat,
-        .components = VkComponentMapping{.r = VK_COMPONENT_SWIZZLE_IDENTITY},
-        .subresourceRange = VkImageSubresourceRange{
-            .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1
-        }
-    };
-
-    VK_Check(vkCreateImageView(device, &viewInfo, nullptr, &depthView));
-}
-
-void RenderEngine::initDescriptorPool()
-{
-    // make global scene descriptor layout
-    VkDescriptorSetLayoutBinding binding{
-        .binding = 0,
-        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-        .descriptorCount = 1,
-        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-        .pImmutableSamplers = nullptr
-    };
-
-    VkDescriptorSetLayoutCreateInfo layoutInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .bindingCount = 1,
-        .pBindings = &binding
-    };
-
-    VK_Check(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &globalSceneDataLayout));
-
-    // make descriptor pool
-    VkDescriptorPoolSize poolSize{
-        .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-        .descriptorCount = static_cast<uint32_t>(NUM_FRAMES)
-    };
-
-    VkDescriptorPoolCreateInfo poolInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .maxSets = static_cast<uint32_t>(NUM_FRAMES),
-        .poolSizeCount = 1,
-        .pPoolSizes = &poolSize
-    };
-
-    VK_Check(vkCreateDescriptorPool(device, &poolInfo, nullptr, &globalDescriptorPool));
-}
-
 /*
 * creates, allocates, and copies data for a Buffer object
 */
@@ -838,6 +760,208 @@ static void createBuffer(
     // if input data is provided, copy it to the allocation
     if (data)
         vmaCopyMemoryToAllocation(allocator, data, allocation, 0, dataSize);
+}
+
+/*
+* creates, allocates, and copies data for an Texture object
+*/
+static void createImage(
+    VmaAllocator allocator, 
+    void* data, VkDeviceSize dataSize, VkImageUsageFlags usage,
+    VkFormat format, VkExtent3D extent, 
+    VkImage& image, VmaAllocation& allocation)
+{
+    // create image and allocation
+    VkImageCreateInfo imageInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = format,
+        .extent = extent,
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = usage,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = 0, // not sharing
+        .pQueueFamilyIndices = nullptr, // not sharing
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
+    };
+
+    VmaAllocationCreateInfo allocInfo{
+        .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .usage = VMA_MEMORY_USAGE_AUTO,
+        .requiredFlags = 0,
+        .preferredFlags = 0,
+        .memoryTypeBits = 0,
+        .pool = VMA_NULL,
+        .pUserData = nullptr,
+        .priority = 0.f
+    };
+
+    VK_Check(vmaCreateImage(allocator, &imageInfo, &allocInfo, &image, &allocation, nullptr));
+
+    // if input data is provided, copy it to the allocation
+    if (data)
+        vmaCopyMemoryToAllocation(allocator, data, allocation, 0, dataSize);
+}
+
+static VkImageView createImageView(VkDevice device, VkImage image, VkFormat format, VkImageAspectFlags aspect)
+{
+    VkImageViewCreateInfo viewInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .image = image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = format,
+        .components = VkComponentMapping{
+            .r = VK_COMPONENT_SWIZZLE_IDENTITY, 
+            .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .a = VK_COMPONENT_SWIZZLE_IDENTITY
+        },
+        .subresourceRange = VkImageSubresourceRange{
+            .aspectMask = aspect,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        },
+    };
+
+    VkImageView imageView;
+    VK_Check(vkCreateImageView(device, &viewInfo, nullptr, &imageView));
+    return imageView;
+}
+
+static VkSampler createSampler(VkDevice device, VkFilter magFilter, VkFilter minFilter, VkSamplerAddressMode uWrap, VkSamplerAddressMode vWrap)
+{
+    VkSamplerCreateInfo samplerInfo{
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .magFilter = magFilter,
+        .minFilter = minFilter,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST, // no mipmaps for now
+        .addressModeU = uWrap,
+        .addressModeV = vWrap,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT, // no 3d textures for now
+        .mipLodBias = 0.f,
+        .anisotropyEnable = VK_FALSE,
+        .maxAnisotropy = 0.f,
+        .compareEnable = VK_FALSE,
+        .compareOp = VK_COMPARE_OP_NEVER,
+        .minLod = 0.f,
+        .maxLod = 0.f,
+        .borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK,
+        .unnormalizedCoordinates = VK_FALSE
+    };
+
+    VkSampler sampler;
+    VK_Check(vkCreateSampler(device, &samplerInfo, nullptr, &sampler));
+    return sampler;
+}
+
+void RenderEngine::initDepth()
+{
+    // get depth format
+    VkFormatProperties formatProps;
+    vkGetPhysicalDeviceFormatProperties(physicalDevice, depthFormat, &formatProps);
+    bool supportsFormat = formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    if (!supportsFormat)
+    {
+        SDL_LogError(0, "Depth image error: format not supported by device\n");
+        std::abort();
+    }
+
+    createImage(
+        allocator, nullptr, 0, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 
+        depthFormat, VkExtent3D{ swapchainExtent.width, swapchainExtent.height, 1 }, 
+        depthImage, depthAlloc
+    );
+
+    // create depth image view
+    depthView = createImageView(device, depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+}
+
+void RenderEngine::initDescriptorPool()
+{
+    // make global scene descriptor layout
+    VkDescriptorSetLayoutBinding globalSceneBinding{
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = nullptr
+    };
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .bindingCount = 1,
+        .pBindings = &globalSceneBinding
+    };
+
+    VK_Check(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &globalSceneDataLayout));
+
+    // make material layout
+    std::array<VkDescriptorSetLayoutBinding, 2> materialBindings;
+    
+    // base color
+    materialBindings[0] = VkDescriptorSetLayoutBinding{
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = nullptr
+    };
+
+    // metallic + roughness
+    materialBindings[1] = VkDescriptorSetLayoutBinding{
+        .binding = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = nullptr
+    };
+
+    layoutInfo = VkDescriptorSetLayoutCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .bindingCount = static_cast<uint32_t>(materialBindings.size()),
+        .pBindings = materialBindings.data()
+    };
+
+    VK_Check(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &materialLayout));
+
+    // make descriptor pool
+    std::array<VkDescriptorPoolSize, 2> poolSizes;
+
+    poolSizes[0] = VkDescriptorPoolSize{
+        .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = static_cast<uint32_t>(NUM_FRAMES)
+    };
+
+    poolSizes[1] = VkDescriptorPoolSize{
+        .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = NUM_MATERIALS_MAX
+    };
+
+    VkDescriptorPoolCreateInfo poolInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .maxSets = NUM_MATERIALS_MAX + NUM_FRAMES,
+        .poolSizeCount = 2,
+        .pPoolSizes = poolSizes.data()
+    };
+
+    VK_Check(vkCreateDescriptorPool(device, &poolInfo, nullptr, &globalDescriptorPool));
 }
 
 void RenderEngine::initFrameData()
@@ -935,7 +1059,7 @@ void RenderEngine::initFrameData()
 void RenderEngine::initGeometryBuffers()
 {
     // load cube mesh
-    std::filesystem::path boxPath = std::filesystem::current_path() / std::filesystem::path("Assets/Box.glb");
+    std::filesystem::path boxPath = std::filesystem::current_path() / std::filesystem::path("Assets/BoxTextured.glb");
     staticMesh = loadStaticMesh(boxPath.string().c_str());
 }
 
@@ -1087,13 +1211,17 @@ void RenderEngine::initGraphicsPipeline()
         .size = static_cast<uint32_t>(sizeof(PushConstants))
     };
 
-    // make basic pipeline layout with push constants
+    // make basic pipeline layout with push constants and descriptors
+    std::array<VkDescriptorSetLayout, 2> descriptorSetLayouts;
+    descriptorSetLayouts[0] = globalSceneDataLayout;
+    descriptorSetLayouts[1] = materialLayout;
+
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layoutInfo.pNext = nullptr;
     layoutInfo.flags = 0;
-    layoutInfo.setLayoutCount = 1;
-    layoutInfo.pSetLayouts = &globalSceneDataLayout;
+    layoutInfo.setLayoutCount = static_cast<uint32_t>(descriptorSetLayouts.size());
+    layoutInfo.pSetLayouts = descriptorSetLayouts.data();
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &pushConstants;
 
@@ -1262,6 +1390,183 @@ struct ScopedGLTFData
     }
 };
 
+void RenderEngine::initMaterialDescriptor(Material& material)
+{
+    // allocate descriptor set
+    VkDescriptorSetAllocateInfo allocInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .pNext = nullptr,
+        .descriptorPool = globalDescriptorPool,
+        .descriptorSetCount = 1,
+        .pSetLayouts = &materialLayout
+    };
+
+    VK_Check(vkAllocateDescriptorSets(device, &allocInfo, &material.descriptorSet));
+
+    // write to descriptor set
+    VkDescriptorImageInfo baseColorInfo{
+        .sampler = material.baseColorTex.sampler,
+        .imageView = material.baseColorTex.view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    };
+
+    VkDescriptorImageInfo metalRoughInfo{
+        .sampler = material.metalRoughTex.sampler,
+        .imageView = material.metalRoughTex.view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    };
+
+    std::array<VkWriteDescriptorSet, 2> writeSets;
+
+    writeSets[0] = VkWriteDescriptorSet{
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .pNext = nullptr,
+        .dstSet = material.descriptorSet,
+        .dstBinding = 0,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .pImageInfo = &baseColorInfo,
+        .pBufferInfo = nullptr,
+        .pTexelBufferView = nullptr
+    };
+
+    writeSets[1] = VkWriteDescriptorSet{
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .pNext = nullptr,
+        .dstSet = material.descriptorSet,
+        .dstBinding = 1,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .pImageInfo = &metalRoughInfo,
+        .pBufferInfo = nullptr,
+        .pTexelBufferView = nullptr
+    };
+
+    vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeSets.size()), writeSets.data(), 0, nullptr);
+}
+
+// returns a blank white 1x1 texture
+Texture RenderEngine::loadWhiteTexture()
+{
+    Texture whiteTex;
+
+    uint32_t white = glm::packUnorm4x8(glm::vec4(1.f, 1.f, 1.f, 1.f));
+    createImage(
+        allocator, &white,
+        static_cast<VkDeviceSize>(1 * 1 * STBI_rgb_alpha),
+        VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R8G8B8A8_UNORM,
+        VkExtent3D{1,1,1},
+        whiteTex.image, whiteTex.alloc
+    );
+
+    whiteTex.view = createImageView(
+        device, whiteTex.image,
+        VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT
+    );
+
+    whiteTex.sampler = createSampler(
+        device, VK_FILTER_NEAREST, VK_FILTER_NEAREST,
+        VK_SAMPLER_ADDRESS_MODE_REPEAT, VK_SAMPLER_ADDRESS_MODE_REPEAT
+    );
+
+    return whiteTex;
+}
+
+Texture RenderEngine::loadTexture(cgltf_texture* texture)
+{
+    Texture resultTex;
+
+    cgltf_image* image = texture->image;
+    cgltf_buffer_view* bufferView = image->buffer_view;
+    cgltf_buffer* buffer = bufferView->buffer;
+    const uint8_t* data = static_cast<uint8_t*>(buffer->data) + bufferView->offset;
+
+    int width, height, nChannels;
+    stbi_uc* imageData = stbi_load_from_memory(
+        data, static_cast<int>(bufferView->size),
+        &width, &height, &nChannels, STBI_rgb_alpha
+    );
+
+    createImage(
+        allocator, imageData,
+        static_cast<VkDeviceSize>(width * height * STBI_rgb_alpha),
+        VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R8G8B8A8_UNORM,
+        VkExtent3D{ static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1 },
+        resultTex.image, resultTex.alloc
+    );
+
+    resultTex.view = createImageView(
+        device, resultTex.image,
+        VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT
+    );
+
+    cgltf_sampler* sampler = texture->sampler;
+
+    VkFilter magFilter;
+    switch (sampler->mag_filter)
+    {
+    case cgltf_filter_type_nearest:
+        magFilter = VK_FILTER_NEAREST;
+        break;
+    case cgltf_filter_type_linear:
+    default:
+        magFilter = VK_FILTER_LINEAR;
+        break;
+    }
+
+    VkFilter minFilter;
+    switch (sampler->min_filter)
+    {
+    case cgltf_filter_type_nearest:
+    case cgltf_filter_type_nearest_mipmap_nearest:
+    case cgltf_filter_type_nearest_mipmap_linear:
+        minFilter = VK_FILTER_NEAREST;
+        break;
+    case cgltf_filter_type_linear:
+    case cgltf_filter_type_linear_mipmap_nearest:
+    case cgltf_filter_type_linear_mipmap_linear:
+    default:
+        minFilter = VK_FILTER_LINEAR;
+        break;
+    }
+
+    VkSamplerAddressMode uWrap{};
+    switch (sampler->wrap_s)
+    {
+    case cgltf_wrap_mode_clamp_to_edge:
+        uWrap = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        break;
+    case cgltf_wrap_mode_mirrored_repeat:
+        uWrap = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+        break;
+    case cgltf_wrap_mode_repeat:
+        uWrap = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        break;
+    }
+
+    VkSamplerAddressMode vWrap{};
+    switch (sampler->wrap_t)
+    {
+    case cgltf_wrap_mode_clamp_to_edge:
+        vWrap = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        break;
+    case cgltf_wrap_mode_mirrored_repeat:
+        vWrap = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+        break;
+    case cgltf_wrap_mode_repeat:
+        vWrap = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        break;
+    }
+
+    resultTex.sampler = createSampler(
+        device, magFilter, minFilter, uWrap, vWrap
+    );
+
+    return resultTex;
+}
+
 std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
 {
     cgltf_options options{}; // default loading options
@@ -1338,11 +1643,37 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
                 cgltf_pbr_metallic_roughness& pbrMetalRough 
                     = surface->material->pbr_metallic_roughness;
 
-                newSurface.material.baseColorFactor 
+                newSurface.material.constants.baseColorFactor 
                     = glm::make_vec4(pbrMetalRough.base_color_factor);
-                newSurface.material.baseMetalnessFactor = pbrMetalRough.metallic_factor;
-                newSurface.material.baseRoughnessFactor = pbrMetalRough.roughness_factor;
+                newSurface.material.constants.metalnessFactor = pbrMetalRough.metallic_factor;
+                newSurface.material.constants.roughnessFactor = pbrMetalRough.roughness_factor;
+
+                // load base color texture
+                if (pbrMetalRough.base_color_texture.texture)
+                {
+                    newSurface.material.baseColorTex = loadTexture(
+                        pbrMetalRough.base_color_texture.texture
+                    );
+                }
+                else
+                {
+                    newSurface.material.baseColorTex = loadWhiteTexture();
+                }
+
+                // load metallic roughness texture
+                if (pbrMetalRough.metallic_roughness_texture.texture)
+                {
+                    newSurface.material.metalRoughTex = loadTexture(
+                        pbrMetalRough.metallic_roughness_texture.texture
+                    );
+                }
+                else
+                {
+                    newSurface.material.metalRoughTex = loadWhiteTexture();
+                }
             }
+
+            initMaterialDescriptor(newSurface.material);
         }
 
         // load index buffer
