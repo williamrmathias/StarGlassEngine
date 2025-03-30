@@ -1633,10 +1633,10 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
 
         // load material
         {
-            newSurface.material = Material{
+            newSurface.material.constants = MaterialConstants{
                 .baseColorFactor = glm::vec4{1.f, 1.f, 1.f, 1.f},
-                .baseMetalnessFactor = 0.f,
-                .baseRoughnessFactor = 1.f
+                .metalnessFactor = 0.f,
+                .roughnessFactor = 1.f
             };
             if (surface->material && surface->material->has_pbr_metallic_roughness)
             {
