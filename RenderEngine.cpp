@@ -80,6 +80,8 @@ void RenderEngine::init(SDL_Window* window)
 
     initDescriptorPool();
 
+    initImmediateStructures();
+
     initFrameData();
 
     initGeometryBuffers();
@@ -163,7 +165,7 @@ void RenderEngine::render()
         cmd, swapchainImages[swapchainIdx],
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 
-        0, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+        VK_ACCESS_2_NONE, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
         VK_IMAGE_ASPECT_COLOR_BIT
     );
 
@@ -172,7 +174,7 @@ void RenderEngine::render()
         cmd, depthImage,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
-        0, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        VK_ACCESS_2_NONE, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
         VK_IMAGE_ASPECT_DEPTH_BIT
     );
 
@@ -414,6 +416,8 @@ void StaticMesh::cleanup(VkDevice device, VmaAllocator allocator)
 void RenderEngine::cleanup()
 {
     vkDeviceWaitIdle(device);
+
+    vkDestroyCommandPool(device, immediateCommandPool, nullptr);
 
     for (FrameData& frame : frames)
         frame.cleanup(device, allocator);
@@ -769,8 +773,11 @@ static void createImage(
     VmaAllocator allocator, 
     void* data, VkDeviceSize dataSize, VkImageUsageFlags usage,
     VkFormat format, VkExtent3D extent, 
-    VkImage& image, VmaAllocation& allocation)
+    VkImage& image, VmaAllocation& allocation,
+    VkCommandBuffer cmd = VK_NULL_HANDLE, VkQueue queue = VK_NULL_HANDLE)
 {
+    if (data) { usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT; }
+
     // create image and allocation
     VkImageCreateInfo imageInfo{
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
@@ -791,7 +798,7 @@ static void createImage(
     };
 
     VmaAllocationCreateInfo allocInfo{
-        .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .flags = 0,
         .usage = VMA_MEMORY_USAGE_AUTO,
         .requiredFlags = 0,
         .preferredFlags = 0,
@@ -803,9 +810,85 @@ static void createImage(
 
     VK_Check(vmaCreateImage(allocator, &imageInfo, &allocInfo, &image, &allocation, nullptr));
 
-    // if input data is provided, copy it to the allocation
+    // if input data is provided, transfer from staging buffer
     if (data)
-        vmaCopyMemoryToAllocation(allocator, data, allocation, 0, dataSize);
+    {
+        VkBuffer stagingBuffer;
+        VmaAllocation stagingAlloc;
+
+        createBuffer(allocator, data, dataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, stagingBuffer, stagingAlloc);
+
+        VK_Check(vkResetCommandBuffer(cmd, 0));
+
+        // transition textures to shader read
+        // begin and start recording to the command buffer
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.pNext = nullptr;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        beginInfo.pInheritanceInfo = nullptr;
+
+        VK_Check(vkBeginCommandBuffer(cmd, &beginInfo));
+
+        transitionImageLayout(
+            cmd, image,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_READ_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT
+        );
+
+        VkBufferImageCopy bufferImageCopy{
+            .bufferOffset = 0,
+            .bufferRowLength = extent.width,
+            .bufferImageHeight = extent.height,
+            .imageSubresource = VkImageSubresourceLayers{
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            },
+            .imageOffset = VkOffset3D{0, 0, 0},
+            .imageExtent = extent
+        };
+
+        vkCmdCopyBufferToImage(
+            cmd, stagingBuffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bufferImageCopy
+        );
+
+        transitionImageLayout(
+            cmd, image,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_READ_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT
+        );
+
+        // end rendering
+        vkEndCommandBuffer(cmd);
+
+        VkCommandBufferSubmitInfo cmdSubmitInfo{};
+        cmdSubmitInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+        cmdSubmitInfo.pNext = nullptr;
+        cmdSubmitInfo.commandBuffer = cmd;
+        cmdSubmitInfo.deviceMask = 0;
+
+        VkSubmitInfo2 submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+        submitInfo.pNext = 0;
+        submitInfo.flags = 0;
+        submitInfo.waitSemaphoreInfoCount = 0;
+        submitInfo.pWaitSemaphoreInfos = nullptr;
+        submitInfo.commandBufferInfoCount = 1;
+        submitInfo.pCommandBufferInfos = &cmdSubmitInfo;
+        submitInfo.signalSemaphoreInfoCount = 0;
+        submitInfo.pSignalSemaphoreInfos = nullptr;
+
+        VK_Check(vkQueueSubmit2(queue, 1, &submitInfo, VK_NULL_HANDLE));
+        vkQueueWaitIdle(queue); // slowness
+
+        vmaDestroyBuffer(allocator, stagingBuffer, stagingAlloc);
+    }
 }
 
 static VkImageView createImageView(VkDevice device, VkImage image, VkFormat format, VkImageAspectFlags aspect)
@@ -962,6 +1045,26 @@ void RenderEngine::initDescriptorPool()
     };
 
     VK_Check(vkCreateDescriptorPool(device, &poolInfo, nullptr, &globalDescriptorPool));
+}
+
+void RenderEngine::initImmediateStructures()
+{
+    // create command pools
+    VkCommandPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    poolInfo.pNext = nullptr;
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily;
+    VK_Check(vkCreateCommandPool(device, &poolInfo, nullptr, &immediateCommandPool)); 
+
+    // create command buffers
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.pNext = nullptr;
+    allocInfo.commandPool = immediateCommandPool;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = 1;
+    VK_Check(vkAllocateCommandBuffers(device, &allocInfo, &immediateCommandBuffer));
 }
 
 void RenderEngine::initFrameData()
@@ -1458,7 +1561,8 @@ Texture RenderEngine::loadWhiteTexture()
         static_cast<VkDeviceSize>(1 * 1 * STBI_rgb_alpha),
         VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R8G8B8A8_UNORM,
         VkExtent3D{1,1,1},
-        whiteTex.image, whiteTex.alloc
+        whiteTex.image, whiteTex.alloc,
+        immediateCommandBuffer, graphicsQueue
     );
 
     whiteTex.view = createImageView(
@@ -1494,7 +1598,8 @@ Texture RenderEngine::loadTexture(cgltf_texture* texture)
         static_cast<VkDeviceSize>(width * height * STBI_rgb_alpha),
         VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R8G8B8A8_UNORM,
         VkExtent3D{ static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1 },
-        resultTex.image, resultTex.alloc
+        resultTex.image, resultTex.alloc,
+        immediateCommandBuffer, graphicsQueue
     );
 
     resultTex.view = createImageView(

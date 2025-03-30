@@ -146,6 +146,9 @@ public:
     QueueFamilyIndices queueFamilyIndices;
     VkQueue graphicsQueue;
 
+    VkCommandPool immediateCommandPool;
+    VkCommandBuffer immediateCommandBuffer;
+
     VkSurfaceKHR surface;
     VkSwapchainKHR swapchain;
     std::vector<VkImage> swapchainImages;
@@ -203,6 +206,7 @@ private:
     void initSwapchain();
     void initDepth();
     void initDescriptorPool();
+    void initImmediateStructures();
     void initFrameData();
     void initGeometryBuffers();
     void initGraphicsPipeline();
