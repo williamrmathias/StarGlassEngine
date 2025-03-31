@@ -42,7 +42,7 @@ struct Device
 
     VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
 
-    VmaAllocator allocator = 0;
+    VmaAllocator allocator = VK_NULL_HANDLE;
 
     struct QueueFamilyIndices
     {

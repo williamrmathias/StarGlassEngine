@@ -1,4 +1,6 @@
+// sge
 #include "RenderEngine.h"
+#include "Log.h"
 
 // sdl
 #include <SDL2/SDL_log.h>
@@ -24,24 +26,6 @@
 // stb
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
-
-static inline void VK_Check(VkResult result)
-{
-    if (result != VK_SUCCESS)
-    {
-        SDL_LogError(0, "Detected Vulkan Error: %s\n", string_VkResult(result));
-        std::abort();
-    }
-}
-
-static inline void SDL_Check(SDL_bool result)
-{
-    if (result == SDL_FALSE)
-    {
-        SDL_LogError(0, "Detected SDL Error\n");
-        std::abort();
-    }
-}
 
 #if defined(_DEBUG)
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
@@ -176,9 +160,9 @@ void RenderEngine::render()
     };
 
     // copy to uniform buffer
-    vmaCopyMemoryToAllocation(
-        device->allocator, &globalSceneData, frame.uniformAlloc, 
-        0, static_cast<VkDeviceSize>(sizeof(globalSceneData))
+    gfx::writeBuffer(
+        device.get(), &globalSceneData,
+        static_cast<VkDeviceSize>(sizeof(globalSceneData)), frame.uniformBuffer
     );
 
     vkCmdBindDescriptorSets(
@@ -251,10 +235,10 @@ void RenderEngine::render()
         for (MeshSurface& surface : staticMesh.value().surfaces)
         {
             VkDeviceSize vertexBufferOffset{ 0 };
-            vkCmdBindVertexBuffers(cmd, 0, 1, &surface.vertexBuffer, &vertexBufferOffset);
+            vkCmdBindVertexBuffers(cmd, 0, 1, &surface.vertexBuffer.buffer, &vertexBufferOffset);
 
             VkDeviceSize indexBufferOffset{ 0 };
-            vkCmdBindIndexBuffer(cmd, surface.indexBuffer, indexBufferOffset, surface.indexType);
+            vkCmdBindIndexBuffer(cmd, surface.indexBuffer.buffer, indexBufferOffset, surface.indexType);
 
             // bind material
             vkCmdBindDescriptorSets(
@@ -369,7 +353,7 @@ void RenderEngine::FrameData::cleanup(gfx::Device* device)
 
     vkDestroyCommandPool(device->device, commandPool, nullptr);
 
-    vmaDestroyBuffer(device->allocator, uniformBuffer, uniformAlloc);
+    gfx::cleanupBuffer(device, uniformBuffer);
 }
 
 void Texture::cleanup(gfx::Device* device)
@@ -389,8 +373,8 @@ void StaticMesh::cleanup(gfx::Device* device)
 {
     for (MeshSurface& surface : surfaces)
     {
-        vmaDestroyBuffer(device->allocator, surface.indexBuffer, surface.indexAlloc);
-        vmaDestroyBuffer(device->allocator, surface.vertexBuffer, surface.vertexAlloc);
+        gfx::cleanupBuffer(device, surface.indexBuffer);
+        gfx::cleanupBuffer(device, surface.vertexBuffer);
 
         surface.material.cleanup(device);
     }
@@ -422,38 +406,57 @@ void RenderEngine::cleanup()
 }
 
 /*
-* creates, allocates, and copies data for a Buffer object
+* Copies a source buffer to another
 */
-static void createBuffer(
-    VmaAllocator allocator,
-    void* data, VkDeviceSize dataSize, VkBufferUsageFlags usage,
-    VkBuffer& buffer, VmaAllocation& allocation)
+void RenderEngine::copyBufferToBuffer(gfx::Buffer srcBuffer, gfx::Buffer dstBuffer, VkDeviceSize dataSize)
 {
-    VkBufferCreateInfo bufferInfo{};
-    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.pNext = nullptr;
-    bufferInfo.flags = 0;
-    bufferInfo.size = dataSize;
-    bufferInfo.usage = usage;
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // exclusive to graphics queue
-    bufferInfo.queueFamilyIndexCount = 0;
-    bufferInfo.pQueueFamilyIndices = nullptr;
+    VK_Check(vkResetFences(device->device, 1, &immediateFence));
+    VK_Check(vkResetCommandBuffer(immediateCommandBuffer, 0));
 
-    VmaAllocationCreateInfo allocInfo{};
-    allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
-    allocInfo.requiredFlags = 0;
-    allocInfo.preferredFlags = 0;
-    allocInfo.memoryTypeBits = 0;
-    allocInfo.pool = VMA_NULL;
-    allocInfo.pUserData = nullptr;
-    allocInfo.priority = 0.f;
+    VkCommandBuffer cmd = immediateCommandBuffer;
 
-    VK_Check(vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &buffer, &allocation, nullptr));
+    VkCommandBufferBeginInfo beginInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .pNext = nullptr,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        .pInheritanceInfo = nullptr
+    };
 
-    // if input data is provided, copy it to the allocation
-    if (data)
-        vmaCopyMemoryToAllocation(allocator, data, allocation, 0, dataSize);
+    VK_Check(vkBeginCommandBuffer(cmd, &beginInfo));
+
+    VkBufferCopy copyRegion{
+        .srcOffset = 0,
+        .dstOffset = 0,
+        .size = dataSize
+    };
+    vkCmdCopyBuffer(cmd, srcBuffer.buffer, dstBuffer.buffer, 1, &copyRegion);
+
+    VK_Check(vkEndCommandBuffer(cmd));
+
+    VkCommandBufferSubmitInfo cmdSubmitInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+        .pNext = nullptr,
+        .commandBuffer = cmd,
+        .deviceMask = 0
+    };
+
+    VkSubmitInfo2 submit{
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+        .pNext = nullptr,
+        .flags = 0,
+        .waitSemaphoreInfoCount = 0,
+        .pWaitSemaphoreInfos = nullptr,
+        .commandBufferInfoCount = 1,
+        .pCommandBufferInfos = &cmdSubmitInfo,
+        .signalSemaphoreInfoCount = 0,
+        .pSignalSemaphoreInfos = nullptr
+    };
+
+    // submit command buffer to the queue and execute it
+    // will now block until the graphics command finish execution
+    VK_Check(vkQueueSubmit2(device->graphicsQueue, 1, &submit, immediateFence));
+
+    VK_Check(vkWaitForFences(device->device, 1, &immediateFence, true, 9'999'999'999));
 }
 
 /*
@@ -807,9 +810,9 @@ void RenderEngine::initFrameData()
     // create uniform buffers + descriptor sets
     for (size_t i = 0; i < NUM_FRAMES; i++)
     {
-        createBuffer(
-            device->allocator, nullptr, sizeof(globalSceneData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            frames[i].uniformBuffer, frames[i].uniformAlloc
+        frames[i].uniformBuffer = gfx::createBuffer(
+            device.get(), gfx::MemoryUsage::CPUWritable,
+            nullptr, sizeof(globalSceneData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT
         );
     }
 
@@ -833,7 +836,7 @@ void RenderEngine::initFrameData()
     for (size_t i = 0; i < NUM_FRAMES; i++)
     {
         VkDescriptorBufferInfo bufferInfo{
-            .buffer = frames[i].uniformBuffer,
+            .buffer = frames[i].uniformBuffer.buffer,
             .offset = 0,
             .range = VK_WHOLE_SIZE
         };
@@ -1446,12 +1449,22 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
             cgltf_accessor_unpack_indices(surface->indices, indexData.data(), outComponentSize, indexCount);
 
             newSurface.indexCount = static_cast<uint32_t>(indexCount);
+
+            VkDeviceSize dataSize = static_cast<VkDeviceSize>(outComponentSize * indexCount);
+
             // create and upload gpu buffer
-            createBuffer(
-                device->allocator, indexData.data(), static_cast<VkDeviceSize>(outComponentSize * indexCount),
-                VK_BUFFER_USAGE_INDEX_BUFFER_BIT, 
-                newSurface.indexBuffer, newSurface.indexAlloc
+            gfx::Buffer stagingBuffer = gfx::createBuffer(
+                device.get(), gfx::MemoryUsage::Staging, indexData.data(), 
+                dataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT
             );
+
+            newSurface.indexBuffer = gfx::createBuffer(
+                device.get(), gfx::MemoryUsage::GPUOnly, nullptr,
+                dataSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT
+            );
+
+            // copy staging to gpu only buffer
+            copyBufferToBuffer(stagingBuffer, newSurface.indexBuffer, dataSize);
         }
 
         // load vertex buffer
@@ -1549,13 +1562,22 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
             }
 
             newSurface.vertexCount = static_cast<uint32_t>(vertexCount);
+
+            VkDeviceSize dataSize = static_cast<VkDeviceSize>(sizeof(vertexData[0]) * vertexCount);
+
             // create and upload gpu buffer
-            createBuffer(
-                device->allocator, vertexData.data(),
-                static_cast<VkDeviceSize>(sizeof(vertexData[0]) * vertexCount),
-                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                newSurface.vertexBuffer, newSurface.vertexAlloc
+            gfx::Buffer stagingBuffer = gfx::createBuffer(
+                device.get(), gfx::MemoryUsage::Staging, vertexData.data(),
+                dataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT
             );
+
+            newSurface.vertexBuffer = gfx::createBuffer(
+                device.get(), gfx::MemoryUsage::GPUOnly, nullptr,
+                dataSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
+            );
+
+            // copy staging to gpu only buffer
+            copyBufferToBuffer(stagingBuffer, newSurface.vertexBuffer, dataSize);
         }
 
         // add new surface

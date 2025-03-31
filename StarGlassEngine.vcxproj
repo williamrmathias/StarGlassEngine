@@ -162,11 +162,13 @@
     <ClCompile Include="Device.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="RenderEngine.cpp" />
+    <ClCompile Include="Resource.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Device.h" />
     <ClInclude Include="Log.h" />
     <ClInclude Include="RenderEngine.h" />
+    <ClInclude Include="Resource.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

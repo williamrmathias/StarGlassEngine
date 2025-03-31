@@ -2,6 +2,7 @@
 
 // sge
 #include "Device.h"
+#include "Resource.h"
 
 // Tell SDL not to mess with main()
 #define SDL_MAIN_HANDLED
@@ -78,11 +79,8 @@ struct Material
 
 struct MeshSurface
 {
-    VkBuffer vertexBuffer;
-    VmaAllocation vertexAlloc;
-
-    VkBuffer indexBuffer;
-    VmaAllocation indexAlloc;
+    gfx::Buffer vertexBuffer;
+    gfx::Buffer indexBuffer;
 
     uint32_t vertexCount;
     uint32_t indexCount;
@@ -131,6 +129,7 @@ public:
 
     VkCommandPool immediateCommandPool;
     VkCommandBuffer immediateCommandBuffer;
+    VkFence immediateFence;
 
     VkImage depthImage;
     VmaAllocation depthAlloc;
@@ -152,8 +151,7 @@ public:
         VkCommandPool commandPool;
         VkCommandBuffer commandBuffer;
 
-        VkBuffer uniformBuffer;
-        VmaAllocation uniformAlloc;
+        gfx::Buffer uniformBuffer;
 
         VkDescriptorSet descriptorSet;
 
@@ -163,9 +161,6 @@ public:
     size_t currentFrameNumber = 0;
 
     std::optional<StaticMesh> staticMesh;
-
-    VkBuffer uniformBuffer;
-    VmaAllocation uniformAlloc;
 
     VkPipelineLayout graphicsPipelineLayout;
     VkPipeline graphicsPipeline;
@@ -181,6 +176,8 @@ private:
     void initFrameData();
     void initGeometryBuffers();
     void initGraphicsPipeline();
+
+    void copyBufferToBuffer(gfx::Buffer srcBuffer, gfx::Buffer dstBuffer, VkDeviceSize dataSize);
 
     FrameData& getCurrentFrameData();
     void incrementFrameData();
