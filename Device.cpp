@@ -164,7 +164,7 @@ static std::optional<Device::QueueFamilyIndices> findQueueFamilies(
         );
 
         if (!graphicsFamilyFound &&
-            queueFamilies[family].queueFamilyProperties.queueFlags | VK_QUEUE_GRAPHICS_BIT &&
+            queueFamilies[family].queueFamilyProperties.queueFlags & VK_QUEUE_GRAPHICS_BIT &&
             presentSupport == VK_TRUE)
         {
             indices.graphicsFamily = family;
@@ -180,7 +180,7 @@ static std::optional<Device::QueueFamilyIndices> findQueueFamilies(
 
 static bool isPhysicalDeviceValid(
     const Device& device,
-    VkPhysicalDevice physicalDevice,
+    const VkPhysicalDevice physicalDevice,
     VkPhysicalDeviceProperties2* deviceProperties,
     std::span<const char* const> deviceExtensions)
 {
@@ -432,7 +432,10 @@ Device createDevice(SDL_Window* window)
 #endif
 
     device.instance = initInstance(instExtensions);
+
+#if defined(_DEBUG)
     device.debugMessenger = initDebugMessenger(device.instance);
+#endif
 
     // create a Vulkan surface for rendering
     SDL_Check(SDL_Vulkan_CreateSurface(window, device.instance, &device.surface));
@@ -491,10 +494,7 @@ void cleanupDevice(Device* device)
     vkDestroyInstance(device->instance, nullptr);
 }
 
-Device::Device(SDL_Window* window)
-{
-    *this = createDevice(window);
-}
+Device::Device(SDL_Window* window) : Device(createDevice(window)) {}
 
 Device::~Device()
 {
