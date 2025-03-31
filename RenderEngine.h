@@ -32,14 +32,6 @@
 #include <optional>
 #include <memory>
 
-static const std::array<const char*, 3> deviceExtensions = {
-    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-    VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
-    VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME
-};
-
-static const uint32_t vkApiVersion = VK_API_VERSION_1_3;
-
 static const size_t NUM_FRAMES = 2;
 static const uint32_t NUM_MATERIALS_MAX = 10;
 

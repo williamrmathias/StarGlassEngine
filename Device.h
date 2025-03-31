@@ -34,10 +34,6 @@ static const VulkanConfig config;
 
 struct Device
 {
-    Device() = default;
-    Device(SDL_Window* window);
-    ~Device();
-
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;
@@ -65,6 +61,10 @@ struct Device
         VkExtent2D swapchainExtent = VkExtent2D{0, 0};
     };
     Swapchain swapchain;
+
+    Device() = default;
+    Device(SDL_Window* window);
+    ~Device();
 };
 
 Device createDevice(SDL_Window* window);
