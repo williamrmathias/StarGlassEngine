@@ -49,8 +49,7 @@ struct Vertex
 
 struct Texture
 {
-    VkImage image;
-    VmaAllocation alloc;
+    gfx::Image image;
 
     VkSampler sampler;
     VkImageView view;
@@ -131,10 +130,8 @@ public:
     VkCommandBuffer immediateCommandBuffer;
     VkFence immediateFence;
 
-    VkImage depthImage;
-    VmaAllocation depthAlloc;
+    gfx::Image depthImage;
     VkImageView depthView;
-    VkFormat depthFormat = VK_FORMAT_D16_UNORM;
 
     GlobalSceneData globalSceneData;
 
@@ -178,6 +175,9 @@ private:
     void initGraphicsPipeline();
 
     void copyBufferToBuffer(gfx::Buffer srcBuffer, gfx::Buffer dstBuffer, VkDeviceSize dataSize);
+    void copyBufferToImage(
+        gfx::Buffer srcBuffer, gfx::Image dstImage, VkExtent3D extent, VkImageSubresourceLayers subresource
+    );
 
     FrameData& getCurrentFrameData();
     void incrementFrameData();

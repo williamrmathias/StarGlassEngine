@@ -57,43 +57,41 @@ void RenderEngine::init(SDL_Window* window)
 }
 
 static void transitionImageLayout(
-    VkCommandBuffer cmd,
-    VkImage image,
-    VkImageLayout oldLayout, VkImageLayout newLayout,
-    VkPipelineStageFlags2 srcStage, VkPipelineStageFlags2 dstStage, 
+    VkCommandBuffer cmd, gfx::Image image, VkImageLayout newLayout,
+    VkPipelineStageFlags2 srcStage, VkPipelineStageFlags2 dstStage,
     VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask,
-    VkImageAspectFlags aspect)
+    VkImageSubresourceRange subresource) 
 {
-    VkImageMemoryBarrier2 imageBarrier{};
-    imageBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    imageBarrier.pNext = nullptr;
-    imageBarrier.srcStageMask = srcStage;
-    imageBarrier.srcAccessMask = srcAccessMask;
-    imageBarrier.dstStageMask = dstStage;
-    imageBarrier.dstAccessMask = dstAccessMask;
-    imageBarrier.oldLayout = oldLayout;
-    imageBarrier.newLayout = newLayout;
-    imageBarrier.srcQueueFamilyIndex = 0; // not changing families
-    imageBarrier.dstQueueFamilyIndex = 0;
-    imageBarrier.image = image;
-    imageBarrier.subresourceRange = VkImageSubresourceRange{
-        .aspectMask = aspect,
-        .baseMipLevel = 0,
-        .levelCount = 1,
-        .baseArrayLayer = 0,
-        .layerCount = 1
+    image.layout = newLayout;
+
+    if (newLayout == image.layout || newLayout == VK_IMAGE_LAYOUT_UNDEFINED) { return; }
+
+    VkImageMemoryBarrier2 imageBarrier{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+        .pNext = nullptr,
+        .srcStageMask = srcStage,
+        .srcAccessMask = srcAccessMask,
+        .dstStageMask = dstStage,
+        .dstAccessMask = dstAccessMask,
+        .oldLayout = image.layout,
+        .newLayout = newLayout,
+        .srcQueueFamilyIndex = 0, // not changing families
+        .dstQueueFamilyIndex = 0,
+        .image = image.image,
+        .subresourceRange = subresource
     };
 
-    VkDependencyInfo dependencyInfo{};
-    dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    dependencyInfo.pNext = nullptr;
-    dependencyInfo.dependencyFlags = 0;
-    dependencyInfo.memoryBarrierCount = 0;
-    dependencyInfo.pBufferMemoryBarriers = nullptr;
-    dependencyInfo.bufferMemoryBarrierCount = 0;
-    dependencyInfo.pBufferMemoryBarriers = nullptr;
-    dependencyInfo.imageMemoryBarrierCount = 1;
-    dependencyInfo.pImageMemoryBarriers = &imageBarrier;
+    VkDependencyInfo dependencyInfo{
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .pNext = nullptr,
+        .dependencyFlags = 0,
+        .memoryBarrierCount = 0,
+        .pMemoryBarriers = nullptr,
+        .bufferMemoryBarrierCount = 0,
+        .pBufferMemoryBarriers = nullptr,
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers = &imageBarrier,
+    };
 
     vkCmdPipelineBarrier2(cmd, &dependencyInfo);
 }
@@ -138,7 +136,7 @@ void RenderEngine::render()
 
     // transition depth image to depth attachment layout
     transitionImageLayout(
-        cmd, depthImage,
+        cmd, depthImage.image,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
         VK_ACCESS_2_NONE, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
@@ -396,7 +394,7 @@ void RenderEngine::cleanup()
     vkDestroyPipelineLayout(device->device, graphicsPipelineLayout, nullptr);
     vkDestroyPipeline(device->device, graphicsPipeline, nullptr);
 
-    vmaDestroyImage(device->allocator, depthImage, depthAlloc);
+    cleanupImage(device.get(), depthImage);
     vkDestroyImageView(device->device, depthView, nullptr);
 
     if (staticMesh.has_value())
@@ -460,128 +458,83 @@ void RenderEngine::copyBufferToBuffer(gfx::Buffer srcBuffer, gfx::Buffer dstBuff
 }
 
 /*
-* creates, allocates, and copies data for an Texture object
+* copies source buffer to an image
 */
-static void createImage(
-    VmaAllocator allocator, 
-    void* data, VkDeviceSize dataSize, VkImageUsageFlags usage,
-    VkFormat format, VkExtent3D extent, 
-    VkImage& image, VmaAllocation& allocation,
-    VkCommandBuffer cmd = VK_NULL_HANDLE, VkQueue queue = VK_NULL_HANDLE)
+void RenderEngine::copyBufferToImage(
+    gfx::Buffer srcBuffer, gfx::Image dstImage, VkExtent3D extent, VkImageSubresourceLayers subresource)
 {
-    if (data) { usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT; }
+    VK_Check(vkResetFences(device->device, 1, &immediateFence));
+    VK_Check(vkResetCommandBuffer(immediateCommandBuffer, 0));
 
-    // create image and allocation
-    VkImageCreateInfo imageInfo{
-        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+    VkCommandBuffer cmd = immediateCommandBuffer;
+
+    VkCommandBufferBeginInfo beginInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .pNext = nullptr,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        .pInheritanceInfo = nullptr
+    };
+
+    VK_Check(vkBeginCommandBuffer(cmd, &beginInfo));
+
+    VkImageSubresourceRange subRange{
+        .aspectMask = subresource.aspectMask,
+        .baseMipLevel = subresource.mipLevel,
+        .levelCount = 1,
+        .baseArrayLayer = subresource.baseArrayLayer,
+        .layerCount = subresource.layerCount
+    };
+    transitionImageLayout(
+        cmd, dstImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 
+        VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+        VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_READ_BIT, subRange
+    );
+
+    VkBufferImageCopy bufferImageCopy{
+        .bufferOffset = 0,
+        .bufferRowLength = extent.width,
+        .bufferImageHeight = extent.height,
+        .imageSubresource = subresource,
+        .imageOffset = VkOffset3D{0, 0, 0},
+        .imageExtent = extent
+    };
+
+    vkCmdCopyBufferToImage(
+        cmd, srcBuffer.buffer, dstImage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bufferImageCopy
+    );
+
+    transitionImageLayout(
+        cmd, dstImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+        VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_READ_BIT, subRange
+    );
+
+    VK_Check(vkEndCommandBuffer(cmd));
+
+    VkCommandBufferSubmitInfo cmdSubmitInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+        .pNext = nullptr,
+        .commandBuffer = cmd,
+        .deviceMask = 0
+    };
+
+    VkSubmitInfo2 submit{
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
         .pNext = nullptr,
         .flags = 0,
-        .imageType = VK_IMAGE_TYPE_2D,
-        .format = format,
-        .extent = extent,
-        .mipLevels = 1,
-        .arrayLayers = 1,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
-        .tiling = VK_IMAGE_TILING_OPTIMAL,
-        .usage = usage,
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-        .queueFamilyIndexCount = 0, // not sharing
-        .pQueueFamilyIndices = nullptr, // not sharing
-        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
+        .waitSemaphoreInfoCount = 0,
+        .pWaitSemaphoreInfos = nullptr,
+        .commandBufferInfoCount = 1,
+        .pCommandBufferInfos = &cmdSubmitInfo,
+        .signalSemaphoreInfoCount = 0,
+        .pSignalSemaphoreInfos = nullptr
     };
 
-    VmaAllocationCreateInfo allocInfo{
-        .flags = 0,
-        .usage = VMA_MEMORY_USAGE_AUTO,
-        .requiredFlags = 0,
-        .preferredFlags = 0,
-        .memoryTypeBits = 0,
-        .pool = VMA_NULL,
-        .pUserData = nullptr,
-        .priority = 0.f
-    };
+    // submit command buffer to the queue and execute it
+    // will now block until the graphics command finish execution
+    VK_Check(vkQueueSubmit2(device->graphicsQueue, 1, &submit, immediateFence));
 
-    VK_Check(vmaCreateImage(allocator, &imageInfo, &allocInfo, &image, &allocation, nullptr));
-
-    // if input data is provided, transfer from staging buffer
-    if (data)
-    {
-        VkBuffer stagingBuffer;
-        VmaAllocation stagingAlloc;
-
-        createBuffer(allocator, data, dataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, stagingBuffer, stagingAlloc);
-
-        VK_Check(vkResetCommandBuffer(cmd, 0));
-
-        // transition textures to shader read
-        // begin and start recording to the command buffer
-        VkCommandBufferBeginInfo beginInfo{};
-        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        beginInfo.pNext = nullptr;
-        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        beginInfo.pInheritanceInfo = nullptr;
-
-        VK_Check(vkBeginCommandBuffer(cmd, &beginInfo));
-
-        transitionImageLayout(
-            cmd, image,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-            VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_READ_BIT,
-            VK_IMAGE_ASPECT_COLOR_BIT
-        );
-
-        VkBufferImageCopy bufferImageCopy{
-            .bufferOffset = 0,
-            .bufferRowLength = extent.width,
-            .bufferImageHeight = extent.height,
-            .imageSubresource = VkImageSubresourceLayers{
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .mipLevel = 0,
-                .baseArrayLayer = 0,
-                .layerCount = 1
-            },
-            .imageOffset = VkOffset3D{0, 0, 0},
-            .imageExtent = extent
-        };
-
-        vkCmdCopyBufferToImage(
-            cmd, stagingBuffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bufferImageCopy
-        );
-
-        transitionImageLayout(
-            cmd, image,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-            VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_READ_BIT,
-            VK_IMAGE_ASPECT_COLOR_BIT
-        );
-
-        // end rendering
-        vkEndCommandBuffer(cmd);
-
-        VkCommandBufferSubmitInfo cmdSubmitInfo{};
-        cmdSubmitInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
-        cmdSubmitInfo.pNext = nullptr;
-        cmdSubmitInfo.commandBuffer = cmd;
-        cmdSubmitInfo.deviceMask = 0;
-
-        VkSubmitInfo2 submitInfo{};
-        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-        submitInfo.pNext = 0;
-        submitInfo.flags = 0;
-        submitInfo.waitSemaphoreInfoCount = 0;
-        submitInfo.pWaitSemaphoreInfos = nullptr;
-        submitInfo.commandBufferInfoCount = 1;
-        submitInfo.pCommandBufferInfos = &cmdSubmitInfo;
-        submitInfo.signalSemaphoreInfoCount = 0;
-        submitInfo.pSignalSemaphoreInfos = nullptr;
-
-        VK_Check(vkQueueSubmit2(queue, 1, &submitInfo, VK_NULL_HANDLE));
-        vkQueueWaitIdle(queue); // slowness
-
-        vmaDestroyBuffer(allocator, stagingBuffer, stagingAlloc);
-    }
+    VK_Check(vkWaitForFences(device->device, 1, &immediateFence, true, 9'999'999'999));
 }
 
 static VkImageView createImageView(VkDevice device, VkImage image, VkFormat format, VkImageAspectFlags aspect)
@@ -643,6 +596,8 @@ static VkSampler createSampler(VkDevice device, VkFilter magFilter, VkFilter min
 
 void RenderEngine::initDepth()
 {
+    VkFormat depthFormat = VK_FORMAT_D16_UNORM;
+
     // get depth format
     VkFormatProperties formatProps;
     vkGetPhysicalDeviceFormatProperties(device->physicalDevice, depthFormat, &formatProps);
@@ -659,14 +614,10 @@ void RenderEngine::initDepth()
         1
     };
 
-    createImage(
-        device->allocator, nullptr, 0, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 
-        depthFormat, depthExtent,
-        depthImage, depthAlloc
-    );
+    depthImage = gfx::createImage(device.get(), VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, depthFormat, depthExtent);
 
     // create depth image view
-    depthView = createImageView(device->device, depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+    depthView = createImageView(device->device, depthImage.image, depthImage.format, VK_IMAGE_ASPECT_DEPTH_BIT);
 }
 
 void RenderEngine::initDescriptorPool()
@@ -1036,7 +987,7 @@ void RenderEngine::initGraphicsPipeline()
     renderInfo.viewMask = 0;
     renderInfo.colorAttachmentCount = 1;
     renderInfo.pColorAttachmentFormats = &device->swapchain.swapchainFormat;
-    renderInfo.depthAttachmentFormat = depthFormat;
+    renderInfo.depthAttachmentFormat = depthImage.format;
     renderInfo.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
 
     // create graphics pipeline
@@ -1229,6 +1180,18 @@ Texture RenderEngine::loadTexture(cgltf_texture* texture)
         &width, &height, &nChannels, STBI_rgb_alpha
     );
 
+    gfx::Buffer stagingBuffer = gfx::createBuffer(
+        device.get(), gfx::MemoryUsage::Staging, imageData, 
+        static_cast<VkDeviceSize>(width * height * STBI_rgb_alpha), 
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT
+    );
+
+    resultTex.image = gfx::createImage(
+        device.get(), VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        VK_FORMAT_R8G8B8A8_UNORM, 
+        VkExtent3D{ static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1 }
+    );
+
     createImage(
         device->allocator, imageData,
         static_cast<VkDeviceSize>(width * height * STBI_rgb_alpha),
@@ -1239,7 +1202,7 @@ Texture RenderEngine::loadTexture(cgltf_texture* texture)
     );
 
     resultTex.view = createImageView(
-        device->device, resultTex.image,
+        device->device, resultTex.image.image,
         VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT
     );
 
@@ -1460,7 +1423,7 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
 
             newSurface.indexBuffer = gfx::createBuffer(
                 device.get(), gfx::MemoryUsage::GPUOnly, nullptr,
-                dataSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT
+                dataSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT
             );
 
             // copy staging to gpu only buffer
@@ -1573,7 +1536,7 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
 
             newSurface.vertexBuffer = gfx::createBuffer(
                 device.get(), gfx::MemoryUsage::GPUOnly, nullptr,
-                dataSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
+                dataSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT
             );
 
             // copy staging to gpu only buffer

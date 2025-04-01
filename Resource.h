@@ -35,4 +35,18 @@ void cleanupBuffer(Device* device, Buffer buffer);
 
 void writeBuffer(Device* device, void* data, VkDeviceSize dataSize, Buffer dstBuffer);
 
+struct Image
+{
+    VkImage image = VK_NULL_HANDLE;
+    VmaAllocation alloc = VK_NULL_HANDLE;
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    Image() = default;
+};
+
+Image createImage(Device* device, VkImageUsageFlags usage, VkFormat format, VkExtent3D extent);
+
+void cleanupImage(Device* device, Image image);
+
 } // namespace gfx
