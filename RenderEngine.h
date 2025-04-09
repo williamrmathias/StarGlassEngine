@@ -130,6 +130,9 @@ public:
     VkCommandBuffer immediateCommandBuffer;
     VkFence immediateFence;
 
+    gfx::Image colorImage;
+    VkImageView colorView;
+
     gfx::Image depthImage;
     VkImageView depthView;
 
@@ -167,7 +170,8 @@ public:
     void cleanup();
 
 private:
-    void initDepth();
+    void initColorTarget();
+    void initDepthTarget();
     void initDescriptorPool();
     void initImmediateStructures();
     void initFrameData();
@@ -176,8 +180,11 @@ private:
 
     void copyBufferToBuffer(gfx::Buffer srcBuffer, gfx::Buffer dstBuffer, VkDeviceSize dataSize);
     void copyBufferToImage(
-        gfx::Buffer srcBuffer, gfx::Image dstImage, VkExtent3D extent, VkImageSubresourceLayers subresource
-    );
+        gfx::Buffer srcBuffer, gfx::Image dstImage, VkExtent3D extent, VkImageSubresourceLayers subresource);
+    void blitImageToImage(
+        VkCommandBuffer cmd, gfx::Image srcImage, gfx::Image dstImage,
+        VkImageSubresourceRange srcSubresource, VkImageSubresourceRange dstSubresource,
+        VkExtent3D srcExtent, VkExtent3D dstExtent);
 
     FrameData& getCurrentFrameData();
     void incrementFrameData();

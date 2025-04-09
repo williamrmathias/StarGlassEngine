@@ -27,7 +27,7 @@ Buffer createBuffer(
         .requiredFlags = 0,
         .preferredFlags = 0,
         .memoryTypeBits = 0,
-        .pool = VMA_NULL,
+        .pool = VK_NULL_HANDLE,
         .pUserData = nullptr,
         .priority = 0.f,
     };
@@ -124,7 +124,7 @@ Image createImage(Device* device, VkImageUsageFlags usage, VkFormat format, VkEx
         .requiredFlags = 0,
         .preferredFlags = 0,
         .memoryTypeBits = 0,
-        .pool = VMA_NULL,
+        .pool = VK_NULL_HANDLE,
         .pUserData = nullptr,
         .priority = 0.f
     };
@@ -133,6 +133,8 @@ Image createImage(Device* device, VkImageUsageFlags usage, VkFormat format, VkEx
 
     image.format = format;
     image.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    return image;
 }
 
 void cleanupImage(Device* device, Image image)
