@@ -415,6 +415,7 @@ void RenderEngine::cleanup()
     vkDeviceWaitIdle(device->device);
 
     vkDestroyCommandPool(device->device, immediateCommandPool, nullptr);
+    vkDestroyFence(device->device, immediateFence, nullptr);
 
     for (FrameData& frame : frames)
         frame.cleanup(device.get());
@@ -1659,6 +1660,8 @@ std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
             VkCommandBuffer cmd = startImmediateCommands();
             copyBufferToBuffer(cmd, stagingBuffer, newSurface.vertexBuffer, dataSize);
             endAndSubmitImmediateCommands();
+
+            gfx::destroyAllocatedBuffer(device.get(), stagingBuffer);
         }
 
         // add new surface
