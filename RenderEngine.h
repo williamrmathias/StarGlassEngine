@@ -49,7 +49,7 @@ struct Vertex
 
 struct Texture
 {
-    gfx::Image image;
+    gfx::AllocatedImage image;
 
     VkSampler sampler;
     VkImageView view;
@@ -78,8 +78,8 @@ struct Material
 
 struct MeshSurface
 {
-    gfx::Buffer vertexBuffer;
-    gfx::Buffer indexBuffer;
+    gfx::AllocatedBuffer vertexBuffer;
+    gfx::AllocatedBuffer indexBuffer;
 
     uint32_t vertexCount;
     uint32_t indexCount;
@@ -130,10 +130,10 @@ public:
     VkCommandBuffer immediateCommandBuffer;
     VkFence immediateFence;
 
-    gfx::Image colorImage;
+    gfx::AllocatedImage colorImage;
     VkImageView colorView;
 
-    gfx::Image depthImage;
+    gfx::AllocatedImage depthImage;
     VkImageView depthView;
 
     GlobalSceneData globalSceneData;
@@ -151,7 +151,7 @@ public:
         VkCommandPool commandPool;
         VkCommandBuffer commandBuffer;
 
-        gfx::Buffer uniformBuffer;
+        gfx::AllocatedBuffer uniformBuffer;
 
         VkDescriptorSet descriptorSet;
 
@@ -178,13 +178,27 @@ private:
     void initGeometryBuffers();
     void initGraphicsPipeline();
 
-    void copyBufferToBuffer(gfx::Buffer srcBuffer, gfx::Buffer dstBuffer, VkDeviceSize dataSize);
+    VkCommandBuffer startImmediateCommands();
+    void endAndSubmitImmediateCommands();
+
+    void copyBufferToBuffer(
+        VkCommandBuffer cmd, 
+        gfx::AllocatedBuffer srcBuffer, gfx::AllocatedBuffer dstBuffer,
+        VkDeviceSize dataSize
+    );
     void copyBufferToImage(
-        gfx::Buffer srcBuffer, gfx::Image dstImage, VkExtent3D extent, VkImageSubresourceLayers subresource);
+        VkCommandBuffer cmd,
+        gfx::AllocatedBuffer srcBuffer, gfx::AllocatedImage dstImage,
+        VkImageLayout initialImageLayout, VkImageLayout finalImageLayout,
+        VkImageSubresourceLayers subresource
+    );
     void blitImageToImage(
-        VkCommandBuffer cmd, gfx::Image srcImage, gfx::Image dstImage,
+        VkCommandBuffer cmd, 
+        VkImage srcImage, VkImage dstImage,
+        VkImageLayout srcImageLayout, VkImageLayout dstImageLayout,
         VkImageSubresourceRange srcSubresource, VkImageSubresourceRange dstSubresource,
-        VkExtent3D srcExtent, VkExtent3D dstExtent);
+        VkExtent3D srcExtent, VkExtent3D dstExtent
+    );
 
     FrameData& getCurrentFrameData();
     void incrementFrameData();

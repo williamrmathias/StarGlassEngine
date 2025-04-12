@@ -12,41 +12,32 @@
 namespace gfx
 {
 
-enum class MemoryUsage : uint8_t
-{
-    GPUOnly = 0,
-    Staging = 1,
-    CPUWritable = 2
-};
-
-struct Buffer
+struct AllocatedBuffer
 {
     VkBuffer buffer = VK_NULL_HANDLE;
     VmaAllocation alloc = VK_NULL_HANDLE;
-
-    Buffer() = default;
 };
 
-Buffer createBuffer(
-    Device* device, MemoryUsage memUsage, void* data, VkDeviceSize dataSize, VkBufferUsageFlags usage
-);
+AllocatedBuffer createAllocatedBuffer(
+    Device* device, VkDeviceSize size, VkBufferUsageFlags usage, VmaAllocationCreateFlags memFlags);
 
-void cleanupBuffer(Device* device, Buffer buffer);
+void destroyAllocatedBuffer(Device* device, AllocatedBuffer buffer);
 
-void writeBuffer(Device* device, void* data, VkDeviceSize dataSize, Buffer dstBuffer);
+void writeToAllocatedBuffer(
+    Device* device, void* data, VkDeviceSize dataSize, AllocatedBuffer dstBuffer);
 
-struct Image
+struct AllocatedImage
 {
     VkImage image = VK_NULL_HANDLE;
     VmaAllocation alloc = VK_NULL_HANDLE;
-    VkFormat format = VK_FORMAT_UNDEFINED;
-    VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-    Image() = default;
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    VkExtent2D extents = { .width = 0, .height = 0 };
 };
 
-Image createImage(Device* device, VkImageUsageFlags usage, VkFormat format, VkExtent3D extent);
+AllocatedImage createAllocatedImage(
+    Device* device, VkImageUsageFlags usage, VkFormat format, VkExtent2D extents);
 
-void cleanupImage(Device* device, Image image);
+void destroyAllocatedImage(Device* device, AllocatedImage image);
 
 } // namespace gfx

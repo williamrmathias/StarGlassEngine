@@ -5,24 +5,24 @@
 namespace gfx
 {
 
-Buffer createBuffer(
-    Device* device, MemoryUsage memUsage, void* data, VkDeviceSize dataSize, VkBufferUsageFlags usage)
+AllocatedBuffer createAllocatedBuffer(
+    Device* device, VkDeviceSize size, VkBufferUsageFlags usage, VmaAllocationCreateFlags memFlags)
 {
-    Buffer buffer;
+    AllocatedBuffer buffer;
 
     VkBufferCreateInfo bufferInfo{
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
-        .size = dataSize,
-        .usage = usage, // modified based on memUsage
+        .size = size,
+        .usage = usage,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE, // no async transfer
-        .queueFamilyIndexCount = VK_QUEUE_FAMILY_IGNORED,
+        .queueFamilyIndexCount = 0,
         .pQueueFamilyIndices = nullptr
     };
 
     VmaAllocationCreateInfo allocInfo{
-        .flags = 0, // modified based on memUsage
+        .flags = memFlags,
         .usage = VMA_MEMORY_USAGE_AUTO,
         .requiredFlags = 0,
         .preferredFlags = 0,
@@ -32,72 +32,32 @@ Buffer createBuffer(
         .priority = 0.f,
     };
 
-    if (memUsage == MemoryUsage::GPUOnly)
-    {
-        // destination of transfer command
-        bufferInfo.usage = usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-
-        VK_Check(vmaCreateBuffer(
-            device->allocator,
-            &bufferInfo, &allocInfo,
-            &buffer.buffer, &buffer.alloc,
-            nullptr
-        ));
-    }
-    if (memUsage == MemoryUsage::Staging)
-    {
-        bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-        allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-
-        VK_Check(vmaCreateBuffer(
-            device->allocator,
-            &bufferInfo, &allocInfo,
-            &buffer.buffer, &buffer.alloc,
-            nullptr
-        ));
-
-        // copy data to allocation
-        if (data)
-        {
-            vmaCopyMemoryToAllocation(device->allocator, data, buffer.alloc, 0, dataSize);
-        }
-    }
-    if (memUsage == MemoryUsage::CPUWritable)
-    {
-        // todo: resizable BAR
-        allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-
-        VK_Check(vmaCreateBuffer(
-            device->allocator,
-            &bufferInfo, &allocInfo,
-            &buffer.buffer, &buffer.alloc,
-            nullptr
-        ));
-
-        // copy data to allocation
-        if (data)
-        {
-            vmaCopyMemoryToAllocation(device->allocator, data, buffer.alloc, 0, dataSize);
-        }
-    }
+    VK_Check(vmaCreateBuffer(
+        device->allocator,
+        &bufferInfo, &allocInfo,
+        &buffer.buffer, &buffer.alloc,
+        nullptr
+    ));
 
     return buffer;
 }
 
-void cleanupBuffer(Device* device, Buffer buffer)
+void destroyAllocatedBuffer(Device* device, AllocatedBuffer buffer)
 {
     vmaDestroyBuffer(device->allocator, buffer.buffer, buffer.alloc);
 }
 
-// Not valid if the buffer is created with MemoryUsage::GPUOnly
-void writeBuffer(Device* device, void* data, VkDeviceSize dataSize, Buffer dstBuffer)
+// only valid if buffer is writable
+void writeToAllocatedBuffer(
+    Device* device, void* data, VkDeviceSize dataSize, AllocatedBuffer dstBuffer)
 {
     vmaCopyMemoryToAllocation(device->allocator, data, dstBuffer.alloc, 0, dataSize);
 }
 
-Image createImage(Device* device, VkImageUsageFlags usage, VkFormat format, VkExtent3D extent)
+AllocatedImage createAllocatedImage(
+    Device* device, VkImageUsageFlags usage, VkFormat format, VkExtent2D extents)
 {
-    Image image;
+    AllocatedImage image;
 
     // create image and allocation
     VkImageCreateInfo imageInfo{
@@ -106,7 +66,7 @@ Image createImage(Device* device, VkImageUsageFlags usage, VkFormat format, VkEx
         .flags = 0,
         .imageType = VK_IMAGE_TYPE_2D,
         .format = format,
-        .extent = extent,
+        .extent = VkExtent3D{.width = extents.width, .height = extents.height, .depth = 1},
         .mipLevels = 1,
         .arrayLayers = 1,
         .samples = VK_SAMPLE_COUNT_1_BIT,
@@ -132,14 +92,16 @@ Image createImage(Device* device, VkImageUsageFlags usage, VkFormat format, VkEx
     VK_Check(vmaCreateImage(device->allocator, &imageInfo, &allocInfo, &image.image, &image.alloc, nullptr));
 
     image.format = format;
-    image.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    image.extents = extents;
 
     return image;
 }
 
-void cleanupImage(Device* device, Image image)
+void destroyAllocatedImage(Device* device, AllocatedImage image)
 {
     vmaDestroyImage(device->allocator, image.image, image.alloc);
+    image.format = VK_FORMAT_UNDEFINED;
+    image.extents = VkExtent2D{ .width = 0, .height = 0 };
 }
 
 } // namespace gfx
