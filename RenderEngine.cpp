@@ -1,5 +1,6 @@
 // sge
 #include "RenderEngine.h"
+#include "Commands.h"
 #include "Log.h"
 
 // sdl
@@ -27,17 +28,8 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
-#if defined(_DEBUG)
-static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
-    VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-    VkDebugUtilsMessageTypeFlagsEXT messageType,
-    const VkDebugUtilsMessengerCallbackDataEXT * pCallbackData,
-    void* pUserData)
+namespace gfx
 {
-    SDL_LogError(0, "Vulkan Validation Layer: %s\n", pCallbackData->pMessage);
-    return VK_FALSE;
-}
-#endif
 
 void RenderEngine::init(SDL_Window* window)
 {
@@ -56,43 +48,6 @@ void RenderEngine::init(SDL_Window* window)
     initGeometryBuffers();
 
     initGraphicsPipeline();
-}
-
-static void transitionImageLayout(
-    VkCommandBuffer cmd, VkImage image, 
-    VkImageLayout oldLayout, VkImageLayout newLayout,
-    VkPipelineStageFlags2 srcStage, VkPipelineStageFlags2 dstStage,
-    VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask,
-    VkImageSubresourceRange subresource) 
-{
-    VkImageMemoryBarrier2 imageBarrier{
-        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-        .pNext = nullptr,
-        .srcStageMask = srcStage,
-        .srcAccessMask = srcAccessMask,
-        .dstStageMask = dstStage,
-        .dstAccessMask = dstAccessMask,
-        .oldLayout = oldLayout,
-        .newLayout = newLayout,
-        .srcQueueFamilyIndex = 0, // not changing families
-        .dstQueueFamilyIndex = 0,
-        .image = image,
-        .subresourceRange = subresource
-    };
-
-    VkDependencyInfo dependencyInfo{
-        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-        .pNext = nullptr,
-        .dependencyFlags = 0,
-        .memoryBarrierCount = 0,
-        .pMemoryBarriers = nullptr,
-        .bufferMemoryBarrierCount = 0,
-        .pBufferMemoryBarriers = nullptr,
-        .imageMemoryBarrierCount = 1,
-        .pImageMemoryBarriers = &imageBarrier,
-    };
-
-    vkCmdPipelineBarrier2(cmd, &dependencyInfo);
 }
 
 void RenderEngine::render()
@@ -125,37 +80,17 @@ void RenderEngine::render()
     VK_Check(vkBeginCommandBuffer(cmd, &beginInfo));
 
     // transition color image to color attachment layout
-    VkImageSubresourceRange colorSubresource{
-        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-        .baseMipLevel = 0,
-        .levelCount = 1,
-        .baseArrayLayer = 0,
-        .layerCount = 1
-    };
-
-    transitionImageLayout(
-        cmd, colorImage.image, 
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 
-        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 
-        VK_ACCESS_2_NONE, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, 
-        colorSubresource
+    transitionImageLayoutCoarse(
+        cmd, colorImage.image,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT
     );
 
     // transition depth image to depth attachment layout
-    VkImageSubresourceRange depthSubresource{
-        .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
-        .baseMipLevel = 0,
-        .levelCount = 1,
-        .baseArrayLayer = 0,
-        .layerCount = 1
-    };
-
-    transitionImageLayout(
+    transitionImageLayoutCoarse(
         cmd, depthImage.image,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
-        VK_ACCESS_2_NONE, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-        depthSubresource
+        VK_IMAGE_ASPECT_DEPTH_BIT
     );
 
     // update constants
@@ -296,6 +231,12 @@ void RenderEngine::render()
 
     // blit main color image to swapchain image
     VkImage swapchainImage = device->swapchain.swapchainImages[swapchainIdx];
+
+    VkExtent3D colorImageExtent{
+        colorImage.extents.width,
+        colorImage.extents.height,
+        1
+    };
     VkExtent3D swapchainExtent{
         device->swapchain.swapchainExtent.width,
         device->swapchain.swapchainExtent.height,
@@ -303,19 +244,18 @@ void RenderEngine::render()
     };
 
     blitImageToImage(
-        cmd, 
+        cmd,
         colorImage.image, swapchainImage,
+        colorImageExtent, swapchainExtent,
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_UNDEFINED,
-        colorSubresource, colorSubresource, swapchainExtent, swapchainExtent
+        VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_ASPECT_COLOR_BIT
     );
 
     // transition swapchain image to presentable layout
-    transitionImageLayout(
+    transitionImageLayoutCoarse(
         cmd, swapchainImage,
         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
-        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_2_NONE,
-        colorSubresource
+        VK_IMAGE_ASPECT_COLOR_BIT
     );
 
     // end command buffer
@@ -501,90 +441,6 @@ void RenderEngine::copyBufferToBuffer(
         .size = dataSize
     };
     vkCmdCopyBuffer(cmd, srcBuffer.buffer, dstBuffer.buffer, 1, &copyRegion);
-}
-
-/*
-* copies source buffer to an image
-*/
-void RenderEngine::copyBufferToImage(
-    VkCommandBuffer cmd,
-    gfx::AllocatedBuffer srcBuffer, gfx::AllocatedImage dstImage,
-    VkImageLayout initialImageLayout, VkImageLayout finalImageLayout,
-    VkImageSubresourceLayers subresource)
-{
-    VkImageSubresourceRange subRange{
-        .aspectMask = subresource.aspectMask,
-        .baseMipLevel = subresource.mipLevel,
-        .levelCount = 1,
-        .baseArrayLayer = subresource.baseArrayLayer,
-        .layerCount = subresource.layerCount
-    };
-    transitionImageLayout(
-        cmd, dstImage.image, 
-        initialImageLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        VK_ACCESS_2_NONE, VK_ACCESS_2_MEMORY_WRITE_BIT, subRange
-    );
-
-    VkBufferImageCopy bufferImageCopy{
-        .bufferOffset = 0,
-        .bufferRowLength = dstImage.extents.width,
-        .bufferImageHeight = dstImage.extents.height,
-        .imageSubresource = subresource,
-        .imageOffset = VkOffset3D{0, 0, 0},
-        .imageExtent = {dstImage.extents.width, dstImage.extents.height, 1}
-    };
-
-    vkCmdCopyBufferToImage(
-        cmd, srcBuffer.buffer, dstImage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bufferImageCopy
-    );
-
-    transitionImageLayout(
-        cmd, dstImage.image,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, finalImageLayout,
-        VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-        VK_ACCESS_2_MEMORY_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT, subRange
-    );
-}
-
-/*
-* copies source image to another
-*/
-void RenderEngine::blitImageToImage(
-    VkCommandBuffer cmd,
-    VkImage srcImage, VkImage dstImage,
-    VkImageLayout srcImageLayout, VkImageLayout dstImageLayout,
-    VkImageSubresourceRange srcSubresource, VkImageSubresourceRange dstSubresource,
-    VkExtent3D srcExtent, VkExtent3D dstExtent)
-{
-    // transfer image formats
-    transitionImageLayout(
-        cmd, srcImage, 
-        srcImageLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-        VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_READ_BIT, srcSubresource
-    );
-
-    transitionImageLayout(
-        cmd, dstImage,
-        dstImageLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-        VK_ACCESS_2_NONE, VK_ACCESS_2_SHADER_READ_BIT, dstSubresource
-    );
-
-    VkImageBlit blitRegion{
-        .srcSubresource = {srcSubresource.aspectMask, srcSubresource.baseMipLevel, srcSubresource.baseArrayLayer, srcSubresource.layerCount},
-        .srcOffsets = {{0, 0, 0}, {static_cast<int32_t>(srcExtent.width), static_cast<int32_t>(srcExtent.height), static_cast<int32_t>(srcExtent.depth)}},
-        .dstSubresource = {dstSubresource.aspectMask, dstSubresource.baseMipLevel, dstSubresource.baseArrayLayer, dstSubresource.layerCount},
-        .dstOffsets = {{0, 0, 0}, {static_cast<int32_t>(dstExtent.width), static_cast<int32_t>(dstExtent.height), static_cast<int32_t>(dstExtent.depth)}}
-    };
-
-    vkCmdBlitImage(
-        cmd, 
-        srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        dstImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 
-        1, &blitRegion, VK_FILTER_LINEAR
-    );
 }
 
 static VkImageView createImageView(VkDevice device, VkImage image, VkFormat format, VkImageAspectFlags aspect)
@@ -1711,3 +1567,5 @@ std::array<VkVertexInputAttributeDescription, 4> Vertex::getInputAttributeDescri
 
     return attribDesc;
 }
+
+} // namespace gfx

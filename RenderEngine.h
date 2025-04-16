@@ -33,6 +33,9 @@
 #include <optional>
 #include <memory>
 
+namespace gfx
+{
+
 static const size_t NUM_FRAMES = 2;
 static const uint32_t NUM_MATERIALS_MAX = 10;
 
@@ -49,12 +52,12 @@ struct Vertex
 
 struct Texture
 {
-    gfx::AllocatedImage image;
+    AllocatedImage image;
 
     VkSampler sampler;
     VkImageView view;
 
-    void cleanup(gfx::Device* device);
+    void cleanup(Device* device);
 };
 
 struct MaterialConstants
@@ -73,13 +76,13 @@ struct Material
 
     VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
 
-    void cleanup(gfx::Device* device);
+    void cleanup(Device* device);
 };
 
 struct MeshSurface
 {
-    gfx::AllocatedBuffer vertexBuffer;
-    gfx::AllocatedBuffer indexBuffer;
+    AllocatedBuffer vertexBuffer;
+    AllocatedBuffer indexBuffer;
 
     uint32_t vertexCount;
     uint32_t indexCount;
@@ -94,7 +97,7 @@ struct StaticMesh
 {
     std::vector<MeshSurface> surfaces;
 
-    void cleanup(gfx::Device* device);
+    void cleanup(Device* device);
 };
 
 struct GlobalSceneData
@@ -124,16 +127,16 @@ class RenderEngine
 {
 public:
 
-    std::unique_ptr<gfx::Device> device;
+    std::unique_ptr<Device> device;
 
     VkCommandPool immediateCommandPool;
     VkCommandBuffer immediateCommandBuffer;
     VkFence immediateFence;
 
-    gfx::AllocatedImage colorImage;
+    AllocatedImage colorImage;
     VkImageView colorView;
 
-    gfx::AllocatedImage depthImage;
+    AllocatedImage depthImage;
     VkImageView depthView;
 
     GlobalSceneData globalSceneData;
@@ -151,11 +154,11 @@ public:
         VkCommandPool commandPool;
         VkCommandBuffer commandBuffer;
 
-        gfx::AllocatedBuffer uniformBuffer;
+        AllocatedBuffer uniformBuffer;
 
         VkDescriptorSet descriptorSet;
 
-        void cleanup(gfx::Device* device);
+        void cleanup(Device* device);
     };
     FrameData frames[NUM_FRAMES];
     size_t currentFrameNumber = 0;
@@ -183,21 +186,8 @@ private:
 
     void copyBufferToBuffer(
         VkCommandBuffer cmd, 
-        gfx::AllocatedBuffer srcBuffer, gfx::AllocatedBuffer dstBuffer,
+        AllocatedBuffer srcBuffer, AllocatedBuffer dstBuffer,
         VkDeviceSize dataSize
-    );
-    void copyBufferToImage(
-        VkCommandBuffer cmd,
-        gfx::AllocatedBuffer srcBuffer, gfx::AllocatedImage dstImage,
-        VkImageLayout initialImageLayout, VkImageLayout finalImageLayout,
-        VkImageSubresourceLayers subresource
-    );
-    void blitImageToImage(
-        VkCommandBuffer cmd, 
-        VkImage srcImage, VkImage dstImage,
-        VkImageLayout srcImageLayout, VkImageLayout dstImageLayout,
-        VkImageSubresourceRange srcSubresource, VkImageSubresourceRange dstSubresource,
-        VkExtent3D srcExtent, VkExtent3D dstExtent
     );
 
     FrameData& getCurrentFrameData();
@@ -209,3 +199,4 @@ private:
     std::optional<StaticMesh> loadStaticMesh(const char* meshPath);
 };
 
+} // namespace gfx
