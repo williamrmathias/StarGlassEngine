@@ -1291,7 +1291,7 @@ Texture RenderEngine::loadTexture(cgltf_texture* texture)
 
     resultTex.image = gfx::createAllocatedImage(
         device.get(), VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-        VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ 1, 1 }
+        VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ static_cast<uint32_t>(width), static_cast<uint32_t>(height) }
     );
 
     VkImageSubresourceLayers subresource{

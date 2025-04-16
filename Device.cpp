@@ -77,6 +77,7 @@ static VkInstance initInstance(std::span<const char* const> instanceExtensions)
         .apiVersion = config.vkApiVersion,
     };
 
+#if defined(_DEBUG)
     // create debug messenger info
     VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{
         .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
@@ -87,6 +88,7 @@ static VkInstance initInstance(std::span<const char* const> instanceExtensions)
         .pfnUserCallback = vulkanDebugCallback,
         .pUserData = nullptr
     };
+#endif
 
     // VkInstanceCreateInfo allows us to specify the layers and/or extensions that are needed.
     VkInstanceCreateInfo instInfo{
