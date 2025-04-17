@@ -30,7 +30,7 @@ int main()
     }
 
     // program initialization
-    RenderEngine renderEngine;
+    gfx::RenderEngine renderEngine;
     renderEngine.init(window);
 
     // Poll for user input.

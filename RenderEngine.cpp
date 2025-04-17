@@ -429,77 +429,6 @@ void RenderEngine::endAndSubmitImmediateCommands()
     VK_Check(vkWaitForFences(device->device, 1, &immediateFence, true, 9'999'999'999));
 }
 
-/*
-* Copies a source buffer to another
-*/
-void RenderEngine::copyBufferToBuffer(
-    VkCommandBuffer cmd, gfx::AllocatedBuffer srcBuffer, gfx::AllocatedBuffer dstBuffer, VkDeviceSize dataSize)
-{
-    VkBufferCopy copyRegion{
-        .srcOffset = 0,
-        .dstOffset = 0,
-        .size = dataSize
-    };
-    vkCmdCopyBuffer(cmd, srcBuffer.buffer, dstBuffer.buffer, 1, &copyRegion);
-}
-
-static VkImageView createImageView(VkDevice device, VkImage image, VkFormat format, VkImageAspectFlags aspect)
-{
-    VkImageViewCreateInfo viewInfo{
-        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .image = image,
-        .viewType = VK_IMAGE_VIEW_TYPE_2D,
-        .format = format,
-        .components = VkComponentMapping{
-            .r = VK_COMPONENT_SWIZZLE_IDENTITY, 
-            .g = VK_COMPONENT_SWIZZLE_IDENTITY,
-            .b = VK_COMPONENT_SWIZZLE_IDENTITY,
-            .a = VK_COMPONENT_SWIZZLE_IDENTITY
-        },
-        .subresourceRange = VkImageSubresourceRange{
-            .aspectMask = aspect,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1
-        },
-    };
-
-    VkImageView imageView;
-    VK_Check(vkCreateImageView(device, &viewInfo, nullptr, &imageView));
-    return imageView;
-}
-
-static VkSampler createSampler(VkDevice device, VkFilter magFilter, VkFilter minFilter, VkSamplerAddressMode uWrap, VkSamplerAddressMode vWrap)
-{
-    VkSamplerCreateInfo samplerInfo{
-        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .magFilter = magFilter,
-        .minFilter = minFilter,
-        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST, // no mipmaps for now
-        .addressModeU = uWrap,
-        .addressModeV = vWrap,
-        .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT, // no 3d textures for now
-        .mipLodBias = 0.f,
-        .anisotropyEnable = VK_FALSE,
-        .maxAnisotropy = 0.f,
-        .compareEnable = VK_FALSE,
-        .compareOp = VK_COMPARE_OP_NEVER,
-        .minLod = 0.f,
-        .maxLod = 0.f,
-        .borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK,
-        .unnormalizedCoordinates = VK_FALSE
-    };
-
-    VkSampler sampler;
-    VK_Check(vkCreateSampler(device, &samplerInfo, nullptr, &sampler));
-    return sampler;
-}
-
 void RenderEngine::initColorTarget()
 {
     VkFormat colorFormat = VK_FORMAT_R8G8B8A8_UNORM;
@@ -520,7 +449,7 @@ void RenderEngine::initColorTarget()
         colorFormat, device->swapchain.swapchainExtent
     );
 
-    colorView = createImageView(device->device, colorImage.image, colorImage.format, VK_IMAGE_ASPECT_COLOR_BIT);
+    colorView = createImageView(device.get(), colorImage.image, colorImage.format, VK_IMAGE_ASPECT_COLOR_BIT);
 }
 
 void RenderEngine::initDepthTarget()
@@ -543,7 +472,7 @@ void RenderEngine::initDepthTarget()
         depthFormat, device->swapchain.swapchainExtent
     );
 
-    depthView = createImageView(device->device, depthImage.image, depthImage.format, VK_IMAGE_ASPECT_DEPTH_BIT);
+    depthView = createImageView(device.get(), depthImage.image, depthImage.format, VK_IMAGE_ASPECT_DEPTH_BIT);
 }
 
 void RenderEngine::initDescriptorPool()
@@ -1101,20 +1030,24 @@ Texture RenderEngine::loadWhiteTexture()
     copyBufferToImage(
         cmd,
         stagingBuffer, whiteTex.image,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        subresource
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_ASPECT_COLOR_BIT
+    );
+    transitionImageLayoutCoarse(
+        cmd, whiteTex.image.image,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT
     );
     endAndSubmitImmediateCommands();
 
     gfx::destroyAllocatedBuffer(device.get(), stagingBuffer);
 
     whiteTex.view = createImageView(
-        device->device, whiteTex.image.image,
+        device.get(), whiteTex.image.image,
         VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT
     );
 
     whiteTex.sampler = createSampler(
-        device->device, VK_FILTER_NEAREST, VK_FILTER_NEAREST,
+        device.get(), VK_FILTER_NEAREST, VK_FILTER_NEAREST,
         VK_SAMPLER_ADDRESS_MODE_REPEAT, VK_SAMPLER_ADDRESS_MODE_REPEAT
     );
 
@@ -1161,15 +1094,19 @@ Texture RenderEngine::loadTexture(cgltf_texture* texture)
     copyBufferToImage(
         cmd,
         stagingBuffer, resultTex.image,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        subresource
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_ASPECT_COLOR_BIT
+    );
+    transitionImageLayoutCoarse(
+        cmd, resultTex.image.image,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT
     );
     endAndSubmitImmediateCommands();
 
     gfx::destroyAllocatedBuffer(device.get(), stagingBuffer);
 
     resultTex.view = createImageView(
-        device->device, resultTex.image.image,
+        device.get(), resultTex.image.image,
         VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT
     );
 
@@ -1232,7 +1169,7 @@ Texture RenderEngine::loadTexture(cgltf_texture* texture)
     }
 
     resultTex.sampler = createSampler(
-        device->device, magFilter, minFilter, uWrap, vWrap
+        device.get(), magFilter, minFilter, uWrap, vWrap
     );
 
     return resultTex;

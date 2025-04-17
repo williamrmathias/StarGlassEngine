@@ -35,6 +35,15 @@ void transitionImageLayoutCoarse(
 );
 
 /*
+* Submits a command to `cmd` to copy `srcBuffer` into `dstBuffer`
+*/
+void copyBufferToBuffer(
+    VkCommandBuffer cmd,
+    gfx::AllocatedBuffer srcBuffer, gfx::AllocatedBuffer dstBuffer,
+    VkDeviceSize dataSize
+);
+
+/*
 * Submits a command to 'cmd' to copy 'srcBuffer' into 'dstImage'
 * dstImage layout ends up as TRANSFER_DST
 */

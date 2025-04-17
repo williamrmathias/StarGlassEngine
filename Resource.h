@@ -12,6 +12,9 @@
 namespace gfx
 {
 
+/*
+* AllocatedBuffer
+*/
 struct AllocatedBuffer
 {
     VkBuffer buffer = VK_NULL_HANDLE;
@@ -26,6 +29,9 @@ void destroyAllocatedBuffer(Device* device, AllocatedBuffer buffer);
 void writeToAllocatedBuffer(
     Device* device, void* data, VkDeviceSize dataSize, AllocatedBuffer dstBuffer);
 
+/*
+* AllocatedImage
+*/
 struct AllocatedImage
 {
     VkImage image = VK_NULL_HANDLE;
@@ -39,5 +45,21 @@ AllocatedImage createAllocatedImage(
     Device* device, VkImageUsageFlags usage, VkFormat format, VkExtent2D extents);
 
 void destroyAllocatedImage(Device* device, AllocatedImage image);
+
+/*
+* VkImageView
+*/
+VkImageView createImageView(
+    Device* device, VkImage image, VkFormat format, VkImageAspectFlags aspect
+);
+
+/*
+* VkSampler
+*/
+VkSampler createSampler(
+    Device* device,
+    VkFilter magFilter, VkFilter minFilter,
+    VkSamplerAddressMode uWrap, VkSamplerAddressMode vWrap
+);
 
 } // namespace gfx

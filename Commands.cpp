@@ -65,6 +65,20 @@ void transitionImageLayoutCoarse(
     );
 }
 
+void copyBufferToBuffer(
+    VkCommandBuffer cmd,
+    gfx::AllocatedBuffer srcBuffer, gfx::AllocatedBuffer dstBuffer,
+    VkDeviceSize dataSize
+)
+{
+    VkBufferCopy copyRegion{
+        .srcOffset = 0,
+        .dstOffset = 0,
+        .size = dataSize
+    };
+    vkCmdCopyBuffer(cmd, srcBuffer.buffer, dstBuffer.buffer, 1, &copyRegion);
+}
+
 void copyBufferToImage(
     VkCommandBuffer cmd,
     AllocatedBuffer srcBuffer, AllocatedImage dstImage,

@@ -184,12 +184,6 @@ private:
     VkCommandBuffer startImmediateCommands();
     void endAndSubmitImmediateCommands();
 
-    void copyBufferToBuffer(
-        VkCommandBuffer cmd, 
-        AllocatedBuffer srcBuffer, AllocatedBuffer dstBuffer,
-        VkDeviceSize dataSize
-    );
-
     FrameData& getCurrentFrameData();
     void incrementFrameData();
     VkShaderModule loadShaderModule(const char* shaderPath);
