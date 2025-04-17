@@ -95,7 +95,7 @@ void copyBufferToImage(
         .bufferOffset = 0,
         .bufferRowLength = 0, // match image extent
         .bufferImageHeight = 0, // match image extent
-        .imageSubresource = VkImageSubresourceLayers{aspect, 0, 0, VK_REMAINING_ARRAY_LAYERS},
+        .imageSubresource = VkImageSubresourceLayers{aspect, 0, 0, 1},
         .imageOffset = VkOffset3D{0, 0, 0},
         .imageExtent = {dstImage.extents.width, dstImage.extents.height, 1}
     };
@@ -129,9 +129,9 @@ void blitImageToImage(
     );
 
     VkImageBlit blitRegion{
-        .srcSubresource = {srcAspect, 0, 0, VK_REMAINING_ARRAY_LAYERS},
+        .srcSubresource = {srcAspect, 0, 0, 1},
         .srcOffsets = {{0, 0, 0}, {static_cast<int32_t>(srcExtent.width), static_cast<int32_t>(srcExtent.height), static_cast<int32_t>(srcExtent.depth)}},
-        .dstSubresource = {dstAspect, 0, 0, VK_REMAINING_ARRAY_LAYERS},
+        .dstSubresource = {dstAspect, 0, 0, 1},
         .dstOffsets = {{0, 0, 0}, {static_cast<int32_t>(dstExtent.width), static_cast<int32_t>(dstExtent.height), static_cast<int32_t>(dstExtent.depth)}}
     };
 
