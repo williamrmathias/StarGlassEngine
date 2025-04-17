@@ -1,5 +1,9 @@
 #pragma once
 
+// sge
+#include "Device.h"
+#include "Resource.h"
+
 // Tell SDL not to mess with main()
 #define SDL_MAIN_HANDLED
 
@@ -29,13 +33,8 @@
 #include <optional>
 #include <memory>
 
-static const std::array<const char*, 3> deviceExtensions = {
-    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-    VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
-    VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME
-};
-
-static const uint32_t vkApiVersion = VK_API_VERSION_1_3;
+namespace gfx
+{
 
 static const size_t NUM_FRAMES = 2;
 static const uint32_t NUM_MATERIALS_MAX = 10;
@@ -53,13 +52,12 @@ struct Vertex
 
 struct Texture
 {
-    VkImage image;
-    VmaAllocation alloc;
+    AllocatedImage image;
 
     VkSampler sampler;
     VkImageView view;
 
-    void cleanup(VkDevice device, VmaAllocator allocator);
+    void cleanup(Device* device);
 };
 
 struct MaterialConstants
@@ -78,16 +76,13 @@ struct Material
 
     VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
 
-    void cleanup(VkDevice device, VmaAllocator allocator);
+    void cleanup(Device* device);
 };
 
 struct MeshSurface
 {
-    VkBuffer vertexBuffer;
-    VmaAllocation vertexAlloc;
-
-    VkBuffer indexBuffer;
-    VmaAllocation indexAlloc;
+    AllocatedBuffer vertexBuffer;
+    AllocatedBuffer indexBuffer;
 
     uint32_t vertexCount;
     uint32_t indexCount;
@@ -102,7 +97,7 @@ struct StaticMesh
 {
     std::vector<MeshSurface> surfaces;
 
-    void cleanup(VkDevice device, VmaAllocator allocator);
+    void cleanup(Device* device);
 };
 
 struct GlobalSceneData
@@ -131,35 +126,18 @@ struct PushConstants
 class RenderEngine
 {
 public:
-    VkInstance instance;
-    VkDebugUtilsMessengerEXT debugMessenger;
 
-    VkPhysicalDevice physicalDevice;
-    VkDevice device;
-
-    VmaAllocator allocator;
-
-    struct QueueFamilyIndices
-    {
-        uint32_t graphicsFamily;
-    };
-    QueueFamilyIndices queueFamilyIndices;
-    VkQueue graphicsQueue;
+    std::unique_ptr<Device> device;
 
     VkCommandPool immediateCommandPool;
     VkCommandBuffer immediateCommandBuffer;
+    VkFence immediateFence;
 
-    VkSurfaceKHR surface;
-    VkSwapchainKHR swapchain;
-    std::vector<VkImage> swapchainImages;
-    std::vector<VkImageView> swapchainImageViews;
-    VkFormat swapchainFormat;
-    VkExtent2D swapchainExtent;
+    AllocatedImage colorImage;
+    VkImageView colorView;
 
-    VkImage depthImage;
-    VmaAllocation depthAlloc;
+    AllocatedImage depthImage;
     VkImageView depthView;
-    VkFormat depthFormat = VK_FORMAT_D16_UNORM;
 
     GlobalSceneData globalSceneData;
 
@@ -176,20 +154,16 @@ public:
         VkCommandPool commandPool;
         VkCommandBuffer commandBuffer;
 
-        VkBuffer uniformBuffer;
-        VmaAllocation uniformAlloc;
+        AllocatedBuffer uniformBuffer;
 
         VkDescriptorSet descriptorSet;
 
-        void cleanup(VkDevice device, VmaAllocator allocator);
+        void cleanup(Device* device);
     };
     FrameData frames[NUM_FRAMES];
     size_t currentFrameNumber = 0;
 
     std::optional<StaticMesh> staticMesh;
-
-    VkBuffer uniformBuffer;
-    VmaAllocation uniformAlloc;
 
     VkPipelineLayout graphicsPipelineLayout;
     VkPipeline graphicsPipeline;
@@ -199,20 +173,17 @@ public:
     void cleanup();
 
 private:
-    void initInstance(std::vector<const char*>& extensions);
-    void initPhysicalDevice();
-    void initDevice();
-    void initVmaAllocator();
-    void initSwapchain();
-    void initDepth();
+    void initColorTarget();
+    void initDepthTarget();
     void initDescriptorPool();
     void initImmediateStructures();
     void initFrameData();
     void initGeometryBuffers();
     void initGraphicsPipeline();
 
-    bool containsExtensions(std::span<const char* const> extensionsRequired, std::span<VkExtensionProperties> extensionsAvailable);
-    bool isPhysicalDeviceValid(VkPhysicalDevice device, VkPhysicalDeviceProperties2* deviceProperties);
+    VkCommandBuffer startImmediateCommands();
+    void endAndSubmitImmediateCommands();
+
     FrameData& getCurrentFrameData();
     void incrementFrameData();
     VkShaderModule loadShaderModule(const char* shaderPath);
@@ -222,3 +193,4 @@ private:
     std::optional<StaticMesh> loadStaticMesh(const char* meshPath);
 };
 
+} // namespace gfx
