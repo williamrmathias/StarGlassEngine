@@ -53,7 +53,15 @@ int main()
                 // Do nothing.
                 break;
             }
+
+            ImGui_ImplSDL2_ProcessEvent(&event); // Forward SDL event to ImGui
         }
+
+        // Start the Dear ImGui frame
+        ImGui_ImplVulkan_NewFrame();
+        ImGui_ImplSDL2_NewFrame();
+        ImGui::NewFrame();
+        ImGui::ShowDemoWindow(); // Show demo window! :)
 
         // render scene
         renderEngine.render();

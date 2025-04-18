@@ -364,3 +364,4 @@ FodyWeavers.xsd
 *.spirv
 *.spirvdxc
 *.cap
+/imgui.ini

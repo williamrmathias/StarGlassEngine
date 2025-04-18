@@ -16,6 +16,11 @@
 #include <SDL2/SDL_vulkan.h>
 #include <SDL2/SDL_filesystem.h>
 
+// imgui
+#include <imgui.h>
+#include <imgui_impl_sdl2.h>
+#include <imgui_impl_vulkan.h>
+
 // cgltf
 #include <cgltf.h>
 
@@ -180,9 +185,12 @@ private:
     void initFrameData();
     void initGeometryBuffers();
     void initGraphicsPipeline();
+    void initImGui(SDL_Window* window);
 
     VkCommandBuffer startImmediateCommands();
     void endAndSubmitImmediateCommands();
+
+    void renderImGui(VkCommandBuffer cmd, VkImageView colorAttachView, VkExtent2D renderExtent);
 
     FrameData& getCurrentFrameData();
     void incrementFrameData();

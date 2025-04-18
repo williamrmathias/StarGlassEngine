@@ -48,6 +48,8 @@ void RenderEngine::init(SDL_Window* window)
     initGeometryBuffers();
 
     initGraphicsPipeline();
+
+    initImGui(window);
 }
 
 void RenderEngine::render()
@@ -145,17 +147,18 @@ void RenderEngine::render()
         .clearValue = VkClearValue{.depthStencil = VkClearDepthStencilValue{.depth = 1.f, .stencil = 1}}
     };
 
-    VkRenderingInfo renderInfo{};
-    renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    renderInfo.pNext = nullptr;
-    renderInfo.flags = 0;
-    renderInfo.renderArea = VkRect2D{ VkOffset2D{0, 0}, device->swapchain.swapchainExtent};
-    renderInfo.layerCount = 1;
-    renderInfo.viewMask = 0;
-    renderInfo.colorAttachmentCount = 1;
-    renderInfo.pColorAttachments = &colorAttachInfo;
-    renderInfo.pDepthAttachment = &depthAttachInfo;
-    renderInfo.pStencilAttachment = nullptr;
+    VkRenderingInfo renderInfo{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .renderArea = VkRect2D{ VkOffset2D{0, 0}, device->swapchain.swapchainExtent},
+        .layerCount = 1,
+        .viewMask = 0,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &colorAttachInfo,
+        .pDepthAttachment = &depthAttachInfo,
+        .pStencilAttachment = nullptr
+    };
 
     vkCmdBeginRendering(cmd, &renderInfo);
 
@@ -231,6 +234,7 @@ void RenderEngine::render()
 
     // blit main color image to swapchain image
     VkImage swapchainImage = device->swapchain.swapchainImages[swapchainIdx];
+    VkImageView swapchainImageView = device->swapchain.swapchainImageViews[swapchainIdx];
 
     VkExtent3D colorImageExtent{
         colorImage.extents.width,
@@ -251,10 +255,20 @@ void RenderEngine::render()
         VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_ASPECT_COLOR_BIT
     );
 
+    // transition swapchain image to drawable layout to render ui
+    transitionImageLayoutCoarse(
+        cmd, swapchainImage,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT
+    );
+
+    // render ui
+    renderImGui(cmd, swapchainImageView, device->swapchain.swapchainExtent);
+
     // transition swapchain image to presentable layout
     transitionImageLayoutCoarse(
         cmd, swapchainImage,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
         VK_IMAGE_ASPECT_COLOR_BIT
     );
 
@@ -353,6 +367,13 @@ void StaticMesh::cleanup(gfx::Device* device)
 void RenderEngine::cleanup()
 {
     vkDeviceWaitIdle(device->device);
+
+    {
+        // cleanup ImGui
+        ImGui_ImplVulkan_Shutdown();
+        ImGui_ImplSDL2_Shutdown();
+        ImGui::DestroyContext();
+    }
 
     vkDestroyCommandPool(device->device, immediateCommandPool, nullptr);
     vkDestroyFence(device->device, immediateFence, nullptr);
@@ -880,6 +901,76 @@ void RenderEngine::initGraphicsPipeline()
     // Shader modules can be destroyed after the pipeline is created
     vkDestroyShaderModule(device->device, vertShader, nullptr);
     vkDestroyShaderModule(device->device, fragShader, nullptr);
+}
+
+void RenderEngine::initImGui(SDL_Window* window)
+{
+    // Setup Dear ImGui context
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
+
+    // Setup Platform/Renderer backends
+    ImGui_ImplSDL2_InitForVulkan(window);
+    ImGui_ImplVulkan_InitInfo init_info = {};
+    init_info.Instance = device->instance;
+    init_info.PhysicalDevice = device->physicalDevice;
+    init_info.Device = device->device;
+    init_info.QueueFamily = device->queueFamilyIndices.graphicsFamily;
+    init_info.Queue = device->graphicsQueue;
+    init_info.DescriptorPoolSize = IMGUI_IMPL_VULKAN_MINIMUM_IMAGE_SAMPLER_POOL_SIZE + 1;
+    init_info.MinImageCount = 2;
+    init_info.ImageCount = 2;
+    init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    init_info.UseDynamicRendering = true;
+    // dynamic rendering parameters for imgui to use
+    init_info.PipelineRenderingCreateInfo = { .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+    init_info.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
+    init_info.PipelineRenderingCreateInfo.pColorAttachmentFormats = &device->swapchain.swapchainFormat;
+    ImGui_ImplVulkan_Init(&init_info);
+
+    ImGui_ImplVulkan_CreateFontsTexture();
+}
+
+void RenderEngine::renderImGui(
+    VkCommandBuffer cmd, VkImageView colorAttachView, VkExtent2D renderExtent
+)
+{
+    // begin rendering
+    VkRenderingAttachmentInfo colorAttachInfo{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+        .pNext = nullptr,
+        .imageView = colorAttachView,
+        .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .resolveMode = VK_RESOLVE_MODE_NONE,
+        .resolveImageView = VK_NULL_HANDLE,
+        .resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .clearValue = VkClearValue{.color = VkClearColorValue{0.f, 0.f, 0.f, 1.f} }
+    };
+
+    VkRenderingInfo renderInfo{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .renderArea = VkRect2D{ VkOffset2D{0, 0}, renderExtent},
+        .layerCount = 1,
+        .viewMask = 0,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &colorAttachInfo,
+        .pDepthAttachment = nullptr,
+        .pStencilAttachment = nullptr
+    };
+
+    vkCmdBeginRendering(cmd, &renderInfo);
+
+    ImGui::Render();
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+
+    // end rendering
+    vkCmdEndRendering(cmd);
 }
 
 RenderEngine::FrameData& RenderEngine::getCurrentFrameData()
