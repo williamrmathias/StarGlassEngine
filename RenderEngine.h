@@ -144,8 +144,6 @@ public:
     AllocatedImage depthImage;
     VkImageView depthView;
 
-    GlobalSceneData globalSceneData;
-
     VkDescriptorPool globalDescriptorPool;
     VkDescriptorSetLayout globalSceneDataLayout;
     VkDescriptorSetLayout materialLayout;
@@ -177,10 +175,16 @@ public:
     void render();
     void cleanup();
 
+    void setSunDirection(float azimuth, float altitude);
+    GlobalSceneData& getGlobalSceneData() { return globalSceneData; }
+
 private:
+    GlobalSceneData globalSceneData;
+
     void initColorTarget();
     void initDepthTarget();
     void initDescriptorPool();
+    void initGlobalSceneData();
     void initImmediateStructures();
     void initFrameData();
     void initGeometryBuffers();

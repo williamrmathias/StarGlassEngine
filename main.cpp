@@ -61,7 +61,19 @@ int main()
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplSDL2_NewFrame();
         ImGui::NewFrame();
-        ImGui::ShowDemoWindow(); // Show demo window! :)
+        if (ImGui::Begin("StarGlass Engine - Editor"))
+        {
+            // azimuth: 0 to 360 degrees
+            // altitude: -90 to 90 degrees
+            static float azimuth = 0, altitude = 0;
+            bool setSunDir = ImGui::SliderFloat("Sun: Azimuth", &azimuth, 0.f, 360.f);
+            setSunDir |= ImGui::SliderFloat("Sun: Altitude", &altitude, -90.f, 90.f);
+            
+            if (setSunDir)
+                renderEngine.setSunDirection(azimuth, altitude);
+
+        }
+        ImGui::End();
 
         // render scene
         renderEngine.render();

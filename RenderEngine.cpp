@@ -41,6 +41,8 @@ void RenderEngine::init(SDL_Window* window)
 
     initDescriptorPool();
 
+    initGlobalSceneData();
+
     initImmediateStructures();
 
     initFrameData();
@@ -94,20 +96,6 @@ void RenderEngine::render()
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
         VK_IMAGE_ASPECT_DEPTH_BIT
     );
-
-    // update constants
-    glm::mat4 view = 
-        glm::lookAt(glm::vec3(0.f, 1.f, 0.f), glm::vec3(0.f, 0.f, 3.f), glm::vec3(0, 1.f, 0));
-
-    glm::mat4 projection = glm::perspective(glm::radians(45.f), 1280.f / 720.f, 0.1f, 100.f);
-    projection[1][1] *= -1; // correct gl -> vk
-
-    globalSceneData = GlobalSceneData{
-        .viewproj = projection * view,
-        .viewPosition = glm::vec3{0.f, 0.f, 0.f},
-        .lightDirection = glm::vec3{0.f, 1.f, 0.f},
-        .lightColor = glm::vec3{1.f, 1.f, 1.f}
-    };
 
     // copy to uniform buffer
     gfx::writeToAllocatedBuffer(
@@ -450,6 +438,20 @@ void RenderEngine::endAndSubmitImmediateCommands()
     VK_Check(vkWaitForFences(device->device, 1, &immediateFence, true, 9'999'999'999));
 }
 
+void RenderEngine::setSunDirection(float azimuth, float altitude)
+{
+    float radAzimuth = glm::radians(azimuth);
+    float radAltitude = glm::radians(altitude);
+
+    float cosAltitude = glm::cos(radAltitude);
+
+    globalSceneData.lightDirection = glm::vec3{ 
+        cosAltitude * glm::sin(radAzimuth), 
+        glm::sqrt(1 - (cosAltitude * cosAltitude)), 
+        cosAltitude * glm::cos(radAzimuth) 
+    };
+}
+
 void RenderEngine::initColorTarget()
 {
     VkFormat colorFormat = VK_FORMAT_R8G8B8A8_UNORM;
@@ -571,6 +573,23 @@ void RenderEngine::initDescriptorPool()
     };
 
     VK_Check(vkCreateDescriptorPool(device->device, &poolInfo, nullptr, &globalDescriptorPool));
+}
+
+void RenderEngine::initGlobalSceneData()
+{
+    // set constants
+    glm::mat4 view =
+        glm::lookAt(glm::vec3(0.f, 1.f, 0.f), glm::vec3(0.f, 0.f, 3.f), glm::vec3(0, 1.f, 0));
+
+    glm::mat4 projection = glm::perspective(glm::radians(45.f), 1280.f / 720.f, 0.1f, 100.f);
+    projection[1][1] *= -1; // correct gl -> vk
+
+    globalSceneData = GlobalSceneData{
+        .viewproj = projection * view,
+        .viewPosition = glm::vec3{0.f, 0.f, 0.f},
+        .lightDirection = glm::vec3{0.f, 1.f, 0.f},
+        .lightColor = glm::vec3{1.f, 1.f, 1.f}
+    };
 }
 
 void RenderEngine::initImmediateStructures()
