@@ -53,7 +53,27 @@ int main()
                 // Do nothing.
                 break;
             }
+
+            ImGui_ImplSDL2_ProcessEvent(&event); // Forward SDL event to ImGui
         }
+
+        // Start the Dear ImGui frame
+        ImGui_ImplVulkan_NewFrame();
+        ImGui_ImplSDL2_NewFrame();
+        ImGui::NewFrame();
+        if (ImGui::Begin("StarGlass Engine - Editor"))
+        {
+            // azimuth: 0 to 360 degrees
+            // altitude: -90 to 90 degrees
+            static float azimuth = 0, altitude = 0;
+            bool setSunDir = ImGui::SliderFloat("Sun: Azimuth", &azimuth, 0.f, 360.f);
+            setSunDir |= ImGui::SliderFloat("Sun: Altitude", &altitude, -90.f, 90.f);
+            
+            if (setSunDir)
+                renderEngine.setSunDirection(azimuth, altitude);
+
+        }
+        ImGui::End();
 
         // render scene
         renderEngine.render();

@@ -16,6 +16,11 @@
 #include <SDL2/SDL_vulkan.h>
 #include <SDL2/SDL_filesystem.h>
 
+// imgui
+#include <imgui.h>
+#include <imgui_impl_sdl2.h>
+#include <imgui_impl_vulkan.h>
+
 // cgltf
 #include <cgltf.h>
 
@@ -139,8 +144,6 @@ public:
     AllocatedImage depthImage;
     VkImageView depthView;
 
-    GlobalSceneData globalSceneData;
-
     VkDescriptorPool globalDescriptorPool;
     VkDescriptorSetLayout globalSceneDataLayout;
     VkDescriptorSetLayout materialLayout;
@@ -172,17 +175,26 @@ public:
     void render();
     void cleanup();
 
+    void setSunDirection(float azimuth, float altitude);
+    GlobalSceneData& getGlobalSceneData() { return globalSceneData; }
+
 private:
+    GlobalSceneData globalSceneData;
+
     void initColorTarget();
     void initDepthTarget();
     void initDescriptorPool();
+    void initGlobalSceneData();
     void initImmediateStructures();
     void initFrameData();
     void initGeometryBuffers();
     void initGraphicsPipeline();
+    void initImGui(SDL_Window* window);
 
     VkCommandBuffer startImmediateCommands();
     void endAndSubmitImmediateCommands();
+
+    void renderImGui(VkCommandBuffer cmd, VkImageView colorAttachView, VkExtent2D renderExtent);
 
     FrameData& getCurrentFrameData();
     void incrementFrameData();
