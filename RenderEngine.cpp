@@ -785,7 +785,7 @@ void RenderEngine::initGraphicsPipeline()
     rasterInfo.depthClampEnable = VK_FALSE; // disable depth test
     rasterInfo.rasterizerDiscardEnable = VK_FALSE;
     rasterInfo.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterInfo.cullMode = VK_CULL_MODE_NONE; // disable backface culling
+    rasterInfo.cullMode = VK_CULL_MODE_BACK_BIT; // enable backface culling
     rasterInfo.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterInfo.depthBiasEnable = VK_FALSE; // disable depth bias
     rasterInfo.depthBiasConstantFactor = 0.f;
