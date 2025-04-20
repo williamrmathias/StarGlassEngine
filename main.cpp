@@ -63,8 +63,8 @@ int main()
         ImGui::NewFrame();
         if (ImGui::Begin("StarGlass Engine - Editor"))
         {
-            // azimuth: 0 to 360 degrees
-            // altitude: -90 to 90 degrees
+            // azimuth: 0 to 360 degrees - where 0 is the angle of north
+            // altitude: -90 to 90 degrees - where 0 is the angle of the horizon
             static float azimuth = 0, altitude = 0;
             bool setSunDir = ImGui::SliderFloat("Sun: Azimuth", &azimuth, 0.f, 360.f);
             setSunDir |= ImGui::SliderFloat("Sun: Altitude", &altitude, -90.f, 90.f);

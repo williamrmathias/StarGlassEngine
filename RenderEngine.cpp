@@ -447,7 +447,7 @@ void RenderEngine::setSunDirection(float azimuth, float altitude)
 
     globalSceneData.lightDirection = glm::vec3{ 
         cosAltitude * glm::sin(radAzimuth), 
-        glm::sqrt(1 - (cosAltitude * cosAltitude)), 
+        glm::sin(radAltitude),
         cosAltitude * glm::cos(radAzimuth) 
     };
 }
@@ -590,6 +590,8 @@ void RenderEngine::initGlobalSceneData()
         .lightDirection = glm::vec3{0.f, 1.f, 0.f},
         .lightColor = glm::vec3{1.f, 1.f, 1.f}
     };
+
+    setSunDirection(0.f, 0.f);
 }
 
 void RenderEngine::initImmediateStructures()

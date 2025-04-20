@@ -1,4 +1,5 @@
 #define PI 3.1415926538
+#define EPSILON 1e-5
 
 struct GlobalSceneData
 {
@@ -15,25 +16,25 @@ struct GlobalSceneData
 };
 
 [[vk::binding(0, 0)]]
-ConstantBuffer<GlobalSceneData> globalSceneData : register(b0);
+ConstantBuffer<GlobalSceneData> globalSceneData;
 
 [[vk::binding(0, 1)]]
-Texture2D baseColorTex : register(t0);
+Texture2D baseColorTex;
 
 [[vk::binding(0, 1)]]
-SamplerState baseColorSampler : register(s0);
+SamplerState baseColorSampler;
 
 [[vk::binding(1, 1)]]
-Texture2D metalRoughTex : register(t1);
+Texture2D metalRoughTex;
 
 [[vk::binding(1, 1)]]
-SamplerState metalRoughSampler : register(s1);
+SamplerState metalRoughSampler;
 
 struct MaterialConstants
 {
     float4 baseColorFactor;
-    float baseMetalnessFactor;
-    float baseRoughnessFactor;
+    float metalnessFactor;
+    float roughnessFactor;
 };
 
 struct PushConstants
@@ -43,7 +44,7 @@ struct PushConstants
 };
 
 [[vk::push_constant]]
-ConstantBuffer<PushConstants> pushConstants : register(b1);
+ConstantBuffer<PushConstants> pushConstants;
 
 struct VertexInput
 {
@@ -57,7 +58,7 @@ struct VertexOutput
 {
     float4 position : SV_Position;
     float3 positionWorld : TEXCOORD0;
-    float3 normal : NORMAL0;
+    float3 normalWorld : NORMAL0;
     float2 uv : TEXCOORD1;
     float4 color : COLOR0;
 };
@@ -74,47 +75,54 @@ VertexOutput simpleVS(VertexInput input)
     output.position = mul(mvp, float4(input.position, 1.f));
     output.positionWorld = mul(pushConstants.model, float4(input.position, 1.f)).xyz;
     
-    output.normal = mul(pushConstants.model, float4(input.normal, 0.f)).xyz;
+    output.normalWorld = mul(pushConstants.model, float4(input.normal, 0.f)).xyz;
     output.uv = input.uv;
     output.color = input.color;
     return output;
 }
 
-float heaviside(float x)
+// microfacet normal distribution function based on the Trowbridge-Reitz / GGX distribution
+float distribution(float NdotH, float alpha)
 {
-    return x > 0.f ? 1.f : 0.f;
+    float a = NdotH * alpha;
+    float k = alpha / (1.f - NdotH * NdotH + a * a);
+    return k * k * (1.f / PI);
 }
 
-// Schlick's approximation to the Fresnel term
-float3 schlicks(float3 f0, float VdotH)
-{
-    float vdoth2 = VdotH * VdotH;
-    return f0 + (1 - f0) * abs(vdoth2 * vdoth2 * VdotH);
-}
-
-// microfacet brdf based on the Trowbridge-Reitz distribution
-// alpha = roughness ^ 2
-float specularBRDF(float alpha, float3 viewDir, float3 lightDir, float3 normal, float3 halfway)
+// visibility function based on height-corrected Smith Geometric Shadowing
+float visibility(float NdotV, float NdotL, float alpha)
 {
     float alpha2 = alpha * alpha;
-    float oneMinusAlpha2 = 1.f - alpha2;
+    float lambdaV = NdotL * sqrt(NdotV * NdotV * (1.f - alpha2) + alpha2);
+    float lambdaL = NdotV * sqrt(NdotL * NdotL * (1.f - alpha2) + alpha2);
+    return 0.5f / (lambdaV + lambdaL);
+}
+
+// Fresnel term based on Schlick's approximation
+// Reflectance at grazing angles (f90) is assumed ti be 1
+float3 fresnel(const float3 f0, float VdotH)
+{
+    float f = pow(1.f - VdotH, 5.f);
+    return f + f0 * (1.f - f);
+}
+
+// Cook-Torrance specular microfacet model
+float3 specularBRDF(float roughness, float3 viewDir, float3 lightDir, float3 normal, float3 halfway)
+{
+    float NdotV = abs(dot(normal, viewDir)) + EPSILON;
+    float NdotL = clamp(dot(normal, lightDir), 0.f, 1.f);
+    float NdotH = clamp(dot(normal, halfway), 0.f, 1.f);
+    float LdotH = clamp(dot(lightDir, halfway), 0.f, 1.f);
     
-    // Trowbridge-Reitz microfacet distribution term
-    float NdotH = dot(normal, halfway);
-    float x = (NdotH * NdotH) * (-oneMinusAlpha2) + 1.f;
-    float D = (alpha2 * heaviside(NdotH)) / (PI * x * x);
+    // input roughness param is a perceptual roughness
+    // alpha is a more physically accurate value
+    float alpha = roughness * roughness;
     
-    // light visibility term
-    float NdotL = dot(normal, lightDir);
-    float HdotL = dot(halfway, lightDir);
-    float vL = heaviside(HdotL) / (abs(NdotL) + sqrt(alpha2 + oneMinusAlpha2 * (NdotL * NdotL)));
+    float D = distribution(NdotH, alpha);
+    float V = visibility(NdotV, NdotL, alpha);
+    float3 F = fresnel(float3(0.04f, 0.04f, 0.04f), LdotH);
     
-    // view visibility term
-    float NdotV = dot(normal, viewDir);
-    float HdotV = dot(halfway, viewDir);
-    float vV = heaviside(HdotV) / (abs(NdotV) + sqrt(alpha2 + oneMinusAlpha2 * (NdotV * NdotV)));
-    
-    return vV * vL * D;
+    return (D * V) * F;
 }
 
 // lambertian brdf
@@ -123,7 +131,6 @@ float3 diffuseBRDF(float3 color)
     return (1.f / PI) * color;
 }
 
-#define F0 0.04
 PixelOutput simplePS(VertexOutput input)
 {
     PixelOutput result;
@@ -133,19 +140,18 @@ PixelOutput simplePS(VertexOutput input)
     
     float4 baseColor = baseColorSample * pushConstants.material.baseColorFactor * input.color;
     
-    float roughness = metalRoughSample.b * pushConstants.material.baseRoughnessFactor;
-    float rough2 = pushConstants.material.baseRoughnessFactor * pushConstants.material.baseRoughnessFactor;
+    float roughness = metalRoughSample.b * pushConstants.material.roughnessFactor;
+    float rough2 = roughness * roughness;
     
     float3 viewDirection = normalize(globalSceneData.viewPosition - input.positionWorld);
     float3 lightDirection = normalize(globalSceneData.lightDirection);
-    float3 normal = normalize(input.normal);
+    float3 normal = normalize(input.normalWorld);
     float3 halfway = normalize(viewDirection + lightDirection);
     
-    float3 fresnel = schlicks(F0, dot(viewDirection, halfway));
-    
     float3 diffuse = diffuseBRDF(baseColor.rgb);
-    float3 specular = specularBRDF(rough2, viewDirection, lightDirection, normal, halfway) * globalSceneData.lightColor;
+    float3 specular = specularBRDF(rough2, viewDirection, lightDirection, normal, halfway);
     
-    result.color = float4(lerp(diffuse, specular, fresnel), 1.f);
+    //result.color = float4(lerp(diffuse, specular, fresnel), 1.f);
+    result.color = float4(diffuse + specular, 1.f);
     return result;
 }
