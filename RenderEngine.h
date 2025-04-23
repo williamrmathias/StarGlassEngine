@@ -169,18 +169,31 @@ public:
 
     std::optional<StaticMesh> staticMesh;
 
+    enum class PipelineType : uint8_t
+    {
+        MainGraphics,
+        BaseColorDebug,
+        MetalDebug,
+        RoughDebug,
+        NumPipelineTypes
+    };
+
+    Pipeline activePipeline;
+
     Pipeline graphicsPipeline;
 
     // debug pipelines
-    Pipeline colorMapPipeline;
-    Pipeline metalMapPipeline;
-    Pipeline roughMapPipeline;
+    Pipeline baseColorPipeline;
+    Pipeline metalPipeline;
+    Pipeline roughPipeline;
 
     void init(SDL_Window* window);
     void render();
     void cleanup();
 
     void setSunDirection(float azimuth, float altitude);
+    void setActiveDrawPipeline(PipelineType pipeline);
+
     GlobalSceneData& getGlobalSceneData() { return globalSceneData; }
 
 private:

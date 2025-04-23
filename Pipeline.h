@@ -18,6 +18,8 @@ struct Pipeline
 {
     VkPipeline pipeline;
     VkPipelineLayout layout;
+
+    void cleanup(Device* device);
 };
 
 class GraphicsPipelineBuilder

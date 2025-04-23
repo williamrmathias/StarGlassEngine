@@ -104,7 +104,7 @@ void RenderEngine::render()
     );
 
     vkCmdBindDescriptorSets(
-        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.layout, 0, 1, &frame.descriptorSet, 
+        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline.layout, 0, 1, &frame.descriptorSet, 
         0, nullptr
     );
 
@@ -168,7 +168,7 @@ void RenderEngine::render()
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     // bind pipeline
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.pipeline);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline.pipeline);
 
     // draw static mesh
     if (staticMesh.has_value())
@@ -183,7 +183,7 @@ void RenderEngine::render()
 
             // bind material
             vkCmdBindDescriptorSets(
-                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.layout, 1, 1, 
+                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline.layout, 1, 1, 
                 &surface.material.descriptorSet, 0, nullptr
             );
 
@@ -204,7 +204,7 @@ void RenderEngine::render()
 
             vkCmdPushConstants(
                 cmd,
-                graphicsPipeline.layout,
+                activePipeline.layout,
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                 0,
                 sizeof(PushConstants),
@@ -373,8 +373,11 @@ void RenderEngine::cleanup()
     vkDestroyDescriptorSetLayout(device->device, globalSceneDataLayout, nullptr);
     vkDestroyDescriptorSetLayout(device->device, materialLayout, nullptr);
 
-    vkDestroyPipelineLayout(device->device, graphicsPipeline.layout, nullptr);
-    vkDestroyPipeline(device->device, graphicsPipeline.pipeline, nullptr);
+    {
+        // pipelines
+        graphicsPipeline.cleanup(device.get());
+        baseColorPipeline.cleanup(device.get());
+    }
 
     destroyAllocatedImage(device.get(), colorImage);
     vkDestroyImageView(device->device, colorView, nullptr);
@@ -450,6 +453,27 @@ void RenderEngine::setSunDirection(float azimuth, float altitude)
         glm::sin(radAltitude),
         cosAltitude * glm::cos(radAzimuth) 
     };
+}
+
+void RenderEngine::setActiveDrawPipeline(PipelineType pipeline)
+{
+    switch (pipeline)
+    {
+    case gfx::RenderEngine::PipelineType::MainGraphics:
+        activePipeline = graphicsPipeline;
+        break;
+    case gfx::RenderEngine::PipelineType::BaseColorDebug:
+        activePipeline = baseColorPipeline;
+        break;
+    case gfx::RenderEngine::PipelineType::MetalDebug:
+        activePipeline = metalPipeline;
+        break;
+    case gfx::RenderEngine::PipelineType::RoughDebug:
+        activePipeline = roughPipeline;
+        break;
+    default:
+        break;
+    }
 }
 
 void RenderEngine::initColorTarget()
@@ -724,13 +748,12 @@ void RenderEngine::initGraphicsPipelines()
 {
     GraphicsPipelineBuilder pipelineBuilder;
 
+    std::filesystem::path vertexShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/SimpleShader_simpleVS.spirv");
+    VkShaderModule vertShader = loadShaderModule(vertexShaderPath.string().c_str());
+
     {
         // graphics pipeline
-
-        std::filesystem::path vertexShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/SimpleShader_simpleVS.spirv");
         std::filesystem::path fragmentShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/SimpleShader_simplePS.spirv");
-
-        VkShaderModule vertShader = loadShaderModule(vertexShaderPath.string().c_str());
         VkShaderModule fragShader = loadShaderModule(fragmentShaderPath.string().c_str());
 
         // render attachments
@@ -762,9 +785,37 @@ void RenderEngine::initGraphicsPipelines()
         graphicsPipeline = pipelineBuilder.build(device.get());
 
         // Shader modules can be destroyed after the pipeline is created
-        vkDestroyShaderModule(device->device, vertShader, nullptr);
         vkDestroyShaderModule(device->device, fragShader, nullptr);
     }
+
+    {
+        // pbr debug pipelines
+
+        // base color
+        std::filesystem::path baseColorFragShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/baseColorDebugPS.spirv");
+        VkShaderModule baseColorFragShader = loadShaderModule(baseColorFragShaderPath.string().c_str());
+        pipelineBuilder.setShaderStages(vertShader, "simpleVS", baseColorFragShader, "baseColorDebugPS");
+        baseColorPipeline = pipelineBuilder.build(device.get());
+
+        // metalness
+        std::filesystem::path metalFragShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/metalDebugPS.spirv");
+        VkShaderModule metalFragShader = loadShaderModule(metalFragShaderPath.string().c_str());
+        pipelineBuilder.setShaderStages(vertShader, "simpleVS", metalFragShader, "metalDebugPS");
+        metalPipeline = pipelineBuilder.build(device.get());
+
+        // roughness
+        std::filesystem::path roughFragShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/roughDebugPS.spirv");
+        VkShaderModule roughFragShader = loadShaderModule(roughFragShaderPath.string().c_str());
+        pipelineBuilder.setShaderStages(vertShader, "simpleVS", roughFragShader, "roughDebugPS");
+        roughPipeline = pipelineBuilder.build(device.get());
+
+        vkDestroyShaderModule(device->device, baseColorFragShader, nullptr);
+        vkDestroyShaderModule(device->device, metalFragShader, nullptr);
+        vkDestroyShaderModule(device->device, roughFragShader, nullptr);
+    }
+
+    activePipeline = graphicsPipeline;
+    vkDestroyShaderModule(device->device, vertShader, nullptr);
 }
 
 void RenderEngine::initImGui(SDL_Window* window)

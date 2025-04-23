@@ -9,6 +9,12 @@
 namespace gfx 
 {
 
+void Pipeline::cleanup(Device* device)
+{
+    vkDestroyPipelineLayout(device->device, layout, nullptr);
+    vkDestroyPipeline(device->device, pipeline, nullptr);
+}
+
 GraphicsPipelineBuilder::GraphicsPipelineBuilder()
 {
     init();

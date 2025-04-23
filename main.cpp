@@ -72,6 +72,19 @@ int main()
             if (setSunDir)
                 renderEngine.setSunDirection(azimuth, altitude);
 
+            using PipelineType = gfx::RenderEngine::PipelineType;
+            static PipelineType pipeline = PipelineType::MainGraphics;
+            if (ImGui::Selectable("MainGraphics", pipeline == PipelineType::MainGraphics))
+                pipeline = PipelineType::MainGraphics;
+            if (ImGui::Selectable("BaseColorDebug", pipeline == PipelineType::BaseColorDebug))
+                pipeline = PipelineType::BaseColorDebug;
+            if (ImGui::Selectable("MetalDebug", pipeline == PipelineType::MetalDebug))
+                pipeline = PipelineType::MetalDebug;
+            if (ImGui::Selectable("RoughDebug", pipeline == PipelineType::RoughDebug))
+                pipeline = PipelineType::RoughDebug;
+
+            renderEngine.setActiveDrawPipeline(pipeline);
+
         }
         ImGui::End();
 

@@ -140,7 +140,7 @@ PixelOutput simplePS(VertexOutput input)
     
     float4 baseColor = baseColorSample * pushConstants.material.baseColorFactor * input.color;
     
-    float roughness = metalRoughSample.b * pushConstants.material.roughnessFactor;
+    float roughness = metalRoughSample.g * pushConstants.material.roughnessFactor;
     float rough2 = roughness * roughness;
     
     float3 viewDirection = normalize(globalSceneData.viewPosition - input.positionWorld);
@@ -153,5 +153,44 @@ PixelOutput simplePS(VertexOutput input)
     
     //result.color = float4(lerp(diffuse, specular, fresnel), 1.f);
     result.color = float4(diffuse + specular, 1.f);
+    return result;
+}
+
+// This shader displays the base color of the draw
+// used for debugging
+PixelOutput baseColorDebugPS(VertexOutput input)
+{
+    PixelOutput result;
+    
+    float4 baseColorSample = baseColorTex.Sample(baseColorSampler, input.uv);
+    
+    result.color = baseColorSample * pushConstants.material.baseColorFactor * input.color;
+    return result;
+}
+
+// This shader displays the metalness of the draw
+// used for debugging
+PixelOutput metalDebugPS(VertexOutput input)
+{
+    PixelOutput result;
+    
+    float4 metalRoughSample = metalRoughTex.Sample(metalRoughSampler, input.uv);
+    float metalFactor = metalRoughSample.b * pushConstants.material.metalnessFactor;
+    
+    result.color = float4(metalFactor, metalFactor, metalFactor, 1.f);
+    return result;
+}
+
+// This shader displays the roughness of the draw
+// used for debugging
+PixelOutput roughDebugPS(VertexOutput input)
+{
+    PixelOutput result;
+    
+    // this shader uses the *perceptual* roughness value, not alpha
+    float4 metalRoughSample = metalRoughTex.Sample(metalRoughSampler, input.uv);
+    float roughFactor = metalRoughSample.g * pushConstants.material.roughnessFactor;
+    
+    result.color = float4(roughFactor, roughFactor, roughFactor, 1.f);
     return result;
 }
