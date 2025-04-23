@@ -63,14 +63,27 @@ int main()
         ImGui::NewFrame();
         if (ImGui::Begin("StarGlass Engine - Editor"))
         {
-            // azimuth: 0 to 360 degrees
-            // altitude: -90 to 90 degrees
+            // azimuth: 0 to 360 degrees - where 0 is the angle of north
+            // altitude: -90 to 90 degrees - where 0 is the angle of the horizon
             static float azimuth = 0, altitude = 0;
             bool setSunDir = ImGui::SliderFloat("Sun: Azimuth", &azimuth, 0.f, 360.f);
             setSunDir |= ImGui::SliderFloat("Sun: Altitude", &altitude, -90.f, 90.f);
             
             if (setSunDir)
                 renderEngine.setSunDirection(azimuth, altitude);
+
+            using PipelineType = gfx::RenderEngine::PipelineType;
+            static PipelineType pipeline = PipelineType::MainGraphics;
+            if (ImGui::Selectable("MainGraphics", pipeline == PipelineType::MainGraphics))
+                pipeline = PipelineType::MainGraphics;
+            if (ImGui::Selectable("BaseColorDebug", pipeline == PipelineType::BaseColorDebug))
+                pipeline = PipelineType::BaseColorDebug;
+            if (ImGui::Selectable("MetalDebug", pipeline == PipelineType::MetalDebug))
+                pipeline = PipelineType::MetalDebug;
+            if (ImGui::Selectable("RoughDebug", pipeline == PipelineType::RoughDebug))
+                pipeline = PipelineType::RoughDebug;
+
+            renderEngine.setActiveDrawPipeline(pipeline);
 
         }
         ImGui::End();

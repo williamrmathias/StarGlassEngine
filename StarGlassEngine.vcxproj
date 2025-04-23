@@ -169,6 +169,7 @@
     <ClCompile Include="imgui\imgui_tables.cpp" />
     <ClCompile Include="imgui\imgui_widgets.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="Pipeline.cpp" />
     <ClCompile Include="RenderEngine.cpp" />
     <ClCompile Include="Resource.cpp" />
   </ItemGroup>
@@ -184,6 +185,7 @@
     <ClInclude Include="imgui\imstb_textedit.h" />
     <ClInclude Include="imgui\imstb_truetype.h" />
     <ClInclude Include="Log.h" />
+    <ClInclude Include="Pipeline.h" />
     <ClInclude Include="RenderEngine.h" />
     <ClInclude Include="Resource.h" />
   </ItemGroup>
