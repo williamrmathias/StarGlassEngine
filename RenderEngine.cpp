@@ -49,7 +49,7 @@ void RenderEngine::init(SDL_Window* window)
 
     initGeometryBuffers();
 
-    initGraphicsPipeline();
+    initGraphicsPipelines();
 
     initImGui(window);
 }
@@ -104,7 +104,7 @@ void RenderEngine::render()
     );
 
     vkCmdBindDescriptorSets(
-        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout, 0, 1, &frame.descriptorSet, 
+        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.layout, 0, 1, &frame.descriptorSet, 
         0, nullptr
     );
 
@@ -168,7 +168,7 @@ void RenderEngine::render()
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     // bind pipeline
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.pipeline);
 
     // draw static mesh
     if (staticMesh.has_value())
@@ -183,7 +183,7 @@ void RenderEngine::render()
 
             // bind material
             vkCmdBindDescriptorSets(
-                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout, 1, 1, 
+                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.layout, 1, 1, 
                 &surface.material.descriptorSet, 0, nullptr
             );
 
@@ -204,7 +204,7 @@ void RenderEngine::render()
 
             vkCmdPushConstants(
                 cmd,
-                graphicsPipelineLayout,
+                graphicsPipeline.layout,
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                 0,
                 sizeof(PushConstants),
@@ -373,8 +373,8 @@ void RenderEngine::cleanup()
     vkDestroyDescriptorSetLayout(device->device, globalSceneDataLayout, nullptr);
     vkDestroyDescriptorSetLayout(device->device, materialLayout, nullptr);
 
-    vkDestroyPipelineLayout(device->device, graphicsPipelineLayout, nullptr);
-    vkDestroyPipeline(device->device, graphicsPipeline, nullptr);
+    vkDestroyPipelineLayout(device->device, graphicsPipeline.layout, nullptr);
+    vkDestroyPipeline(device->device, graphicsPipeline.pipeline, nullptr);
 
     destroyAllocatedImage(device.get(), colorImage);
     vkDestroyImageView(device->device, colorView, nullptr);
@@ -720,208 +720,51 @@ void RenderEngine::initGeometryBuffers()
     staticMesh = loadStaticMesh(boxPath.string().c_str());
 }
 
-void RenderEngine::initGraphicsPipeline()
+void RenderEngine::initGraphicsPipelines()
 {
-    std::filesystem::path vertexShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/SimpleShader_simpleVS.spirv");
-    std::filesystem::path fragmentShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/SimpleShader_simplePS.spirv");
+    GraphicsPipelineBuilder pipelineBuilder;
 
-    VkShaderModule vertShader = loadShaderModule(vertexShaderPath.string().c_str());
-    VkShaderModule fragShader = loadShaderModule(fragmentShaderPath.string().c_str());
-
-    // create shader stages
-    std::array<VkPipelineShaderStageCreateInfo, 2> stageInfos;
-    for (auto& stage : stageInfos)
     {
-        stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stage.pNext = nullptr;
-        stage.flags = 0;
-        stage.pSpecializationInfo = nullptr;
+        // graphics pipeline
+
+        std::filesystem::path vertexShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/SimpleShader_simpleVS.spirv");
+        std::filesystem::path fragmentShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/SimpleShader_simplePS.spirv");
+
+        VkShaderModule vertShader = loadShaderModule(vertexShaderPath.string().c_str());
+        VkShaderModule fragShader = loadShaderModule(fragmentShaderPath.string().c_str());
+
+        // render attachments
+        pipelineBuilder.setColorAttachmentFormats(std::span{ &device->swapchain.swapchainFormat, 1 });
+        pipelineBuilder.setDepthAttachmentFormat(depthImage.format);
+
+        // shader info
+        pipelineBuilder.setShaderStages(vertShader, "simpleVS", fragShader, "simplePS");
+        pipelineBuilder.setPushConstantSize(static_cast<uint32_t>(sizeof(PushConstants)));
+
+        std::array<VkDescriptorSetLayout, 2> descriptorSetLayouts = {
+            globalSceneDataLayout, materialLayout
+        };
+        pipelineBuilder.setDescriptorSetLayouts(descriptorSetLayouts);
+
+        // IA info
+        VkVertexInputBindingDescription vertexBindingDesc = Vertex::getInputBindingDescription();
+        std::array<VkVertexInputAttributeDescription, 4> vertexAttribDesc = Vertex::getInputAttributeDescription();
+        pipelineBuilder.setVertexInputState(std::span{ &vertexBindingDesc, 1 }, vertexAttribDesc);
+        pipelineBuilder.setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+
+        // rasterization info
+        pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
+        pipelineBuilder.setSampleCount(VK_SAMPLE_COUNT_1_BIT);
+        pipelineBuilder.setDepthMode(VK_TRUE, VK_TRUE);
+        pipelineBuilder.disableBlendMode();
+
+        // build pipeline
+        graphicsPipeline = pipelineBuilder.build(device.get());
+
+        // Shader modules can be destroyed after the pipeline is created
+        vkDestroyShaderModule(device->device, vertShader, nullptr);
+        vkDestroyShaderModule(device->device, fragShader, nullptr);
     }
-    stageInfos[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    stageInfos[0].module = vertShader;
-    stageInfos[0].pName = "simpleVS";
-
-    stageInfos[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    stageInfos[1].module = fragShader;
-    stageInfos[1].pName = "simplePS";
-
-    // create vertex input
-    VkVertexInputBindingDescription vertexBindingDesc = Vertex::getInputBindingDescription();
-    std::array<VkVertexInputAttributeDescription, 4> vertexAttribDesc = Vertex::getInputAttributeDescription();
-
-    VkPipelineVertexInputStateCreateInfo vertexInfo{};
-    vertexInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInfo.pNext = nullptr;
-    vertexInfo.flags = 0;
-    vertexInfo.vertexBindingDescriptionCount = 1;
-    vertexInfo.pVertexBindingDescriptions = &vertexBindingDesc;
-    vertexInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexAttribDesc.size());
-    vertexInfo.pVertexAttributeDescriptions = vertexAttribDesc.data();
-
-    // create input assembly
-    VkPipelineInputAssemblyStateCreateInfo iaInfo{};
-    iaInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    iaInfo.pNext = nullptr;
-    iaInfo.flags = 0;
-    iaInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    iaInfo.primitiveRestartEnable = VK_FALSE;
-
-    // create viewport state
-    // Note: We're using dynamic viewport and scissor state
-    VkPipelineViewportStateCreateInfo viewportInfo{};
-    viewportInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    viewportInfo.pNext = nullptr;
-    viewportInfo.flags = 0;
-    viewportInfo.viewportCount = 1;
-    viewportInfo.pViewports = nullptr;
-    viewportInfo.scissorCount = 1;
-    viewportInfo.pScissors = nullptr;
-
-    // create rasterization state
-    VkPipelineRasterizationStateCreateInfo rasterInfo{};
-    rasterInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterInfo.pNext = nullptr;
-    rasterInfo.flags = 0;
-    rasterInfo.depthClampEnable = VK_FALSE; // disable depth test
-    rasterInfo.rasterizerDiscardEnable = VK_FALSE;
-    rasterInfo.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterInfo.cullMode = VK_CULL_MODE_BACK_BIT; // enable backface culling
-    rasterInfo.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    rasterInfo.depthBiasEnable = VK_FALSE; // disable depth bias
-    rasterInfo.depthBiasConstantFactor = 0.f;
-    rasterInfo.depthBiasClamp = 0.f;
-    rasterInfo.depthBiasSlopeFactor = 0.f;
-    rasterInfo.lineWidth = 1.f;
-
-    // create multisample state
-    // only use 1 sample
-    VkPipelineMultisampleStateCreateInfo multiInfo{};
-    multiInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multiInfo.pNext = nullptr;
-    multiInfo.flags = 0;
-    multiInfo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-    multiInfo.sampleShadingEnable = VK_FALSE;
-    multiInfo.minSampleShading = 0.f;
-    multiInfo.pSampleMask = nullptr; // disable sample mask test
-    multiInfo.alphaToCoverageEnable = VK_FALSE;
-    multiInfo.alphaToOneEnable = VK_FALSE;
-
-    // create depth stencil state
-    VkPipelineDepthStencilStateCreateInfo dsInfo{};
-    dsInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    dsInfo.pNext = nullptr;
-    dsInfo.flags = 0;
-    dsInfo.depthTestEnable = VK_TRUE; // enable depth test
-    dsInfo.depthWriteEnable = VK_TRUE; // enable depth buffer writes
-    dsInfo.depthCompareOp = VK_COMPARE_OP_LESS;
-    dsInfo.depthBoundsTestEnable = VK_FALSE; // disable depth bounds test
-    dsInfo.stencilTestEnable = VK_FALSE; // disable stencil test
-    dsInfo.front = VkStencilOpState{};
-    dsInfo.back = VkStencilOpState{};
-    dsInfo.minDepthBounds = 0.f;
-    dsInfo.maxDepthBounds = 1.f;
-
-    // create color blend state
-    VkPipelineColorBlendAttachmentState blendState{};
-    blendState.blendEnable = VK_FALSE;
-    blendState.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-    blendState.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
-    blendState.colorBlendOp = VK_BLEND_OP_ADD;
-    blendState.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    blendState.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-    blendState.alphaBlendOp = VK_BLEND_OP_ADD;
-    blendState.colorWriteMask = VK_COLOR_COMPONENT_R_BIT
-        | VK_COLOR_COMPONENT_G_BIT
-        | VK_COLOR_COMPONENT_B_BIT
-        | VK_COLOR_COMPONENT_A_BIT;
-
-    VkPipelineColorBlendStateCreateInfo blendInfo{};
-    blendInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    blendInfo.pNext = nullptr;
-    blendInfo.flags = 0;
-    blendInfo.logicOpEnable = VK_FALSE;
-    blendInfo.logicOp = VK_LOGIC_OP_COPY;
-    blendInfo.attachmentCount = 1;
-    blendInfo.pAttachments = &blendState;
-    blendInfo.blendConstants[0] = 0.f;
-    blendInfo.blendConstants[1] = 0.f;
-    blendInfo.blendConstants[2] = 0.f;
-    blendInfo.blendConstants[3] = 0.f;
-
-    // specify dynamic state (viewport and scissor)
-    std::array<VkDynamicState, 2> dynamicStates{
-        VK_DYNAMIC_STATE_VIEWPORT,
-        VK_DYNAMIC_STATE_SCISSOR
-    };
-
-    VkPipelineDynamicStateCreateInfo dynamicInfo{};
-    dynamicInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamicInfo.pNext = nullptr;
-    dynamicInfo.flags = 0;
-    dynamicInfo.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
-    dynamicInfo.pDynamicStates = dynamicStates.data();
-
-    // make push constants
-    VkPushConstantRange pushConstants{
-        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-        .offset = 0,
-        .size = static_cast<uint32_t>(sizeof(PushConstants))
-    };
-
-    // make basic pipeline layout with push constants and descriptors
-    std::array<VkDescriptorSetLayout, 2> descriptorSetLayouts;
-    descriptorSetLayouts[0] = globalSceneDataLayout;
-    descriptorSetLayouts[1] = materialLayout;
-
-    VkPipelineLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.pNext = nullptr;
-    layoutInfo.flags = 0;
-    layoutInfo.setLayoutCount = static_cast<uint32_t>(descriptorSetLayouts.size());
-    layoutInfo.pSetLayouts = descriptorSetLayouts.data();
-    layoutInfo.pushConstantRangeCount = 1;
-    layoutInfo.pPushConstantRanges = &pushConstants;
-
-    VK_Check(vkCreatePipelineLayout(device->device, &layoutInfo, nullptr, &graphicsPipelineLayout));
-
-    // rendering create info
-    VkPipelineRenderingCreateInfo renderInfo{};
-    renderInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-    renderInfo.pNext = nullptr;
-    renderInfo.viewMask = 0;
-    renderInfo.colorAttachmentCount = 1;
-    renderInfo.pColorAttachmentFormats = &device->swapchain.swapchainFormat;
-    renderInfo.depthAttachmentFormat = depthImage.format;
-    renderInfo.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
-
-    // create graphics pipeline
-    VkGraphicsPipelineCreateInfo pipelineInfo{};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipelineInfo.pNext = &renderInfo;
-    pipelineInfo.flags = 0;
-    pipelineInfo.stageCount = static_cast<uint32_t>(stageInfos.size());
-    pipelineInfo.pStages = stageInfos.data();
-    pipelineInfo.pVertexInputState = &vertexInfo;
-    pipelineInfo.pInputAssemblyState = &iaInfo;
-    pipelineInfo.pTessellationState = nullptr;
-    pipelineInfo.pViewportState = &viewportInfo;
-    pipelineInfo.pRasterizationState = &rasterInfo;
-    pipelineInfo.pMultisampleState = &multiInfo;
-    pipelineInfo.pDepthStencilState = &dsInfo;
-    pipelineInfo.pDynamicState = &dynamicInfo;
-    pipelineInfo.pColorBlendState = &blendInfo;
-    pipelineInfo.layout = graphicsPipelineLayout;
-    pipelineInfo.renderPass = VK_NULL_HANDLE; // use dynamic rendering
-    pipelineInfo.subpass = 0;
-    pipelineInfo.basePipelineHandle = VK_NULL_HANDLE; // don't derive pipeline
-    pipelineInfo.basePipelineIndex = 0;
-
-    VK_Check(vkCreateGraphicsPipelines(
-        device->device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline));
-
-    // Shader modules can be destroyed after the pipeline is created
-    vkDestroyShaderModule(device->device, vertShader, nullptr);
-    vkDestroyShaderModule(device->device, fragShader, nullptr);
 }
 
 void RenderEngine::initImGui(SDL_Window* window)

@@ -3,6 +3,7 @@
 // sge
 #include "Device.h"
 #include "Resource.h"
+#include "Pipeline.h"
 
 // Tell SDL not to mess with main()
 #define SDL_MAIN_HANDLED
@@ -168,8 +169,12 @@ public:
 
     std::optional<StaticMesh> staticMesh;
 
-    VkPipelineLayout graphicsPipelineLayout;
-    VkPipeline graphicsPipeline;
+    Pipeline graphicsPipeline;
+
+    // debug pipelines
+    Pipeline colorMapPipeline;
+    Pipeline metalMapPipeline;
+    Pipeline roughMapPipeline;
 
     void init(SDL_Window* window);
     void render();
@@ -188,7 +193,7 @@ private:
     void initImmediateStructures();
     void initFrameData();
     void initGeometryBuffers();
-    void initGraphicsPipeline();
+    void initGraphicsPipelines();
     void initImGui(SDL_Window* window);
 
     VkCommandBuffer startImmediateCommands();

@@ -1,5 +1,6 @@
 // sge
 #include "Pipeline.h"
+#include "Log.h"
 
 // stl
 #include <array>
@@ -9,6 +10,217 @@ namespace gfx
 {
 
 GraphicsPipelineBuilder::GraphicsPipelineBuilder()
+{
+    init();
+}
+
+Pipeline GraphicsPipelineBuilder::build(Device* device)
+{
+    Pipeline pipeline;
+
+    // create layout
+    VK_Check(vkCreatePipelineLayout(device->device, &layoutInfo, nullptr, &pipeline.layout));
+
+    // set dynamic state
+    // viewport and scissor
+    std::array<VkDynamicState, 2> dynamicStates{
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR
+    };
+
+    VkPipelineDynamicStateCreateInfo dynamicInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
+        .pDynamicStates = dynamicStates.data()
+    };
+
+    // create graphics pipeline
+    VkGraphicsPipelineCreateInfo pipelineInfo{
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .pNext = &renderInfo,
+        .flags = 0,
+        .stageCount = static_cast<uint32_t>(shaderStages.size()),
+        .pStages = shaderStages.data(),
+        .pVertexInputState = &vertexInputInfo,
+        .pInputAssemblyState = &inputAssemblyInfo,
+        .pTessellationState = nullptr,
+        .pViewportState = &viewportInfo,
+        .pRasterizationState = &rasterInfo,
+        .pMultisampleState = &multisampleInfo,
+        .pDepthStencilState = &depthStencilInfo,
+        .pColorBlendState = &blendInfo,
+        .pDynamicState = &dynamicInfo,
+        .layout = pipeline.layout,
+        .renderPass = VK_NULL_HANDLE, // use dynamic rendering
+        .subpass = 0,
+        .basePipelineHandle = VK_NULL_HANDLE,
+        .basePipelineIndex = 0
+    };
+
+    VK_Check(vkCreateGraphicsPipelines(
+        device->device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline.pipeline
+    ));
+
+    return pipeline;
+}
+
+void GraphicsPipelineBuilder::clear()
+{
+    shaderStages.clear();
+    vertexBindingDesc.clear();
+    vertexAttribDesc.clear();
+    colorAttachmentFormats.clear();
+    blendAttachmentStates.clear();
+
+    pushConstants = {};
+    descriptorSetLayouts.clear();
+
+    init();
+}
+
+void GraphicsPipelineBuilder::setColorAttachmentFormats(std::span<VkFormat> colorFormats)
+{
+    colorAttachmentFormats.assign(colorFormats.begin(), colorFormats.end());
+
+    renderInfo.colorAttachmentCount = colorAttachmentFormats.size();
+    renderInfo.pColorAttachmentFormats = colorAttachmentFormats.data();
+}
+
+void GraphicsPipelineBuilder::setDepthAttachmentFormat(VkFormat depthFromat)
+{
+    renderInfo.depthAttachmentFormat = depthFromat;
+}
+
+void GraphicsPipelineBuilder::setShaderStages(
+    VkShaderModule vertexShader, std::string_view vertexEntryName,
+    VkShaderModule fragmentShader, std::string_view fragmentEntryName
+)
+{
+    VkPipelineShaderStageCreateInfo stageInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .pSpecializationInfo = nullptr
+    };
+
+    {
+        // vertex
+        stageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
+        stageInfo.module = vertexShader;
+        stageInfo.pName = vertexEntryName.data();
+        shaderStages.push_back(stageInfo);
+    }
+
+    {
+        // fragment
+        stageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stageInfo.module = fragmentShader;
+        stageInfo.pName = fragmentEntryName.data();
+        shaderStages.push_back(stageInfo);
+    }
+}
+
+void GraphicsPipelineBuilder::setVertexInputState(
+    std::span<VkVertexInputBindingDescription> bindingDesc,
+    std::span<VkVertexInputAttributeDescription> attribDesc
+)
+{
+    // have to copy spans so external pointer can't become invalid
+    vertexBindingDesc.assign(bindingDesc.begin(), bindingDesc.end());
+    vertexAttribDesc.assign(attribDesc.begin(), attribDesc.end());
+
+    vertexInputInfo.vertexBindingDescriptionCount = bindingDesc.size();
+    vertexInputInfo.pVertexBindingDescriptions = bindingDesc.data();
+
+    vertexInputInfo.vertexAttributeDescriptionCount = attribDesc.size();
+    vertexInputInfo.pVertexAttributeDescriptions = attribDesc.data();
+}
+
+void GraphicsPipelineBuilder::setPrimitiveTopology(VkPrimitiveTopology topology)
+{
+    inputAssemblyInfo.topology = topology;
+}
+
+void GraphicsPipelineBuilder::setPolygonMode(VkPolygonMode polygonMode)
+{
+    rasterInfo.polygonMode = polygonMode;
+}
+
+void GraphicsPipelineBuilder::setSampleCount(VkSampleCountFlagBits sampleCount)
+{
+    // todo: Multisampling
+    if (sampleCount != VK_SAMPLE_COUNT_1_BIT)
+        assert("GraphicsPipelineBuilderError: Multisampled Pipelines Not Supported!");
+
+    multisampleInfo.rasterizationSamples = sampleCount;
+}
+
+void GraphicsPipelineBuilder::setDepthMode(VkBool32 depthTestEnable, VkBool32 depthWriteEnable)
+{
+    if (renderInfo.depthAttachmentFormat == VK_FORMAT_UNDEFINED &&
+        (depthTestEnable == VK_TRUE || depthWriteEnable == VK_TRUE))
+    {
+        assert("GraphicsPipelineBuilderError: Depth Test / Write enabled, but there's no depth attachment");
+    }
+
+    depthStencilInfo.depthTestEnable = depthTestEnable;
+    depthStencilInfo.depthWriteEnable = depthWriteEnable;
+}
+
+void GraphicsPipelineBuilder::disableBlendMode()
+{
+    std::vector<VkBool32> blendModes(renderInfo.colorAttachmentCount, VK_FALSE);
+    setBlendMode(blendModes);
+}
+
+void GraphicsPipelineBuilder::setBlendMode(std::span<VkBool32> blendEnable)
+{
+    if (blendEnable.size() != renderInfo.colorAttachmentCount)
+        assert("GraphicsPipelineBuilderError: Not every color attachment has a blend state specified");
+
+    VkPipelineColorBlendAttachmentState blendState{
+        .blendEnable = VK_FALSE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ZERO,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT
+            | VK_COLOR_COMPONENT_G_BIT
+            | VK_COLOR_COMPONENT_B_BIT
+            | VK_COLOR_COMPONENT_A_BIT
+    };
+
+    blendAttachmentStates.reserve(renderInfo.colorAttachmentCount);
+    for (auto blendMode : blendEnable)
+    {
+        blendState.blendEnable = blendMode;
+        blendAttachmentStates.emplace_back(blendState);
+    }
+
+    blendInfo.attachmentCount = renderInfo.colorAttachmentCount;
+    blendInfo.pAttachments = blendAttachmentStates.data();
+}
+
+void GraphicsPipelineBuilder::setPushConstantSize(uint32_t size)
+{
+    assert(size <= 128);
+    pushConstants.size = size;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushConstants;
+}
+
+void GraphicsPipelineBuilder::setDescriptorSetLayouts(std::span<VkDescriptorSetLayout> layouts)
+{
+    descriptorSetLayouts.assign(layouts.begin(), layouts.end());
+    layoutInfo.setLayoutCount = descriptorSetLayouts.size();
+    layoutInfo.pSetLayouts = descriptorSetLayouts.data();
+}
+
+void GraphicsPipelineBuilder::init()
 {
     // init rendering info
     // default no color, depth, or stencil attachments
@@ -120,137 +332,14 @@ GraphicsPipelineBuilder::GraphicsPipelineBuilder()
         .pushConstantRangeCount = 0,
         .pPushConstantRanges = nullptr
     };
-}
 
-void GraphicsPipelineBuilder::setColorAttachmentFormats(std::span<VkFormat> colorFormats)
-{
-    colorAttachmentFormats.assign(colorFormats.begin(), colorFormats.end());
-
-    renderInfo.colorAttachmentCount = colorAttachmentFormats.size();
-    renderInfo.pColorAttachmentFormats = colorAttachmentFormats.data();
-}
-
-void GraphicsPipelineBuilder::setDepthAttachmentFormat(VkFormat depthFromat)
-{
-    renderInfo.depthAttachmentFormat = depthFromat;
-}
-
-void GraphicsPipelineBuilder::setShaderStages(VkShaderModule vertexShader, VkShaderModule fragmentShader)
-{
-    VkPipelineShaderStageCreateInfo stageInfo{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .pSpecializationInfo = nullptr
+    // init push constants
+    // default size 0
+    pushConstants = {
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        .offset = 0,
+        .size = 0
     };
-    stageInfo.pName = nullptr; // check valid
-
-    {
-        // vertex
-        stageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
-        stageInfo.module = vertexShader;
-        shaderStages.push_back(stageInfo);
-    }
-
-    {
-        // fragment
-        stageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        stageInfo.module = fragmentShader;
-        shaderStages.push_back(stageInfo);
-    }
-}
-
-void GraphicsPipelineBuilder::setVertexInputState(
-    std::span<VkVertexInputBindingDescription> bindingDesc,
-    std::span<VkVertexInputAttributeDescription> attribDesc
-)
-{
-    // have to copy spans so external pointer can't become invalid
-    vertexBindingDesc.assign(bindingDesc.begin(), bindingDesc.end());
-    vertexAttribDesc.assign(attribDesc.begin(), attribDesc.end());
-
-    vertexInputInfo.vertexBindingDescriptionCount = bindingDesc.size();
-    vertexInputInfo.pVertexBindingDescriptions = bindingDesc.data();
-
-    vertexInputInfo.vertexAttributeDescriptionCount = attribDesc.size();
-    vertexInputInfo.pVertexAttributeDescriptions = attribDesc.data();
-}
-
-void GraphicsPipelineBuilder::setPrimitiveTopology(VkPrimitiveTopology topology)
-{
-    inputAssemblyInfo.topology = topology;
-}
-
-void GraphicsPipelineBuilder::setPolygonMode(VkPolygonMode polygonMode)
-{
-    rasterInfo.polygonMode = polygonMode;
-}
-
-void GraphicsPipelineBuilder::setSampleCount(VkSampleCountFlagBits sampleCount)
-{
-    // todo: Multisampling
-    if (sampleCount != VK_SAMPLE_COUNT_1_BIT)
-        assert("GraphicsPipelineBuilderError: Multisampled Pipelines Not Supported!");
-
-    multisampleInfo.rasterizationSamples = sampleCount;
-}
-
-void GraphicsPipelineBuilder::setDepthMode(VkBool32 depthTestEnable, VkBool32 depthWriteEnable)
-{
-    if (renderInfo.depthAttachmentFormat == VK_FORMAT_UNDEFINED &&
-        (depthTestEnable == VK_TRUE || depthWriteEnable == VK_TRUE))
-    {
-        assert("GraphicsPipelineBuilderError: Depth Test / Write enabled, but there's no depth attachment");
-    }
-
-    depthStencilInfo.depthTestEnable = depthTestEnable;
-    depthStencilInfo.depthWriteEnable = depthWriteEnable;
-}
-
-void GraphicsPipelineBuilder::disableBlendMode()
-{
-    std::vector<VkBool32> blendModes(renderInfo.colorAttachmentCount, VK_FALSE);
-    setBlendMode(blendModes);
-}
-
-void GraphicsPipelineBuilder::setBlendMode(std::span<VkBool32> blendEnable)
-{
-    if (blendEnable.size() != renderInfo.colorAttachmentCount)
-        assert("GraphicsPipelineBuilderError: Not every color attachment has a blend state specified");
-
-    VkPipelineColorBlendAttachmentState blendState{
-        .blendEnable = VK_FALSE,
-        .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
-        .dstColorBlendFactor = VK_BLEND_FACTOR_ZERO,
-        .colorBlendOp = VK_BLEND_OP_ADD,
-        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
-        .alphaBlendOp = VK_BLEND_OP_ADD,
-        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT
-            | VK_COLOR_COMPONENT_G_BIT
-            | VK_COLOR_COMPONENT_B_BIT
-            | VK_COLOR_COMPONENT_A_BIT
-    };
-
-    blendAttachmentStates.reserve(renderInfo.colorAttachmentCount);
-    for (auto blendMode : blendEnable)
-    {
-        blendState.blendEnable = blendMode;
-        blendAttachmentStates.emplace_back(blendState);
-    }
-
-    blendInfo.attachmentCount = renderInfo.colorAttachmentCount;
-    blendInfo.pAttachments = blendAttachmentStates.data();
-}
-
-void GraphicsPipelineBuilder::setPushConstantSize(uint32_t size)
-{
-
-}
-
-void GraphicsPipelineBuilder::setDescriptorSetLayouts(std::span<VkDescriptorSetLayout> layouts)
-{
-
 }
 
 } // namespace gfx

@@ -1,11 +1,15 @@
 #pragma once
 
+// sge
+#include "Device.h"
+
 // Vulkan
 #include <vulkan/vulkan.h>
 
 // stl
 #include <vector>
 #include <span>
+#include <string_view>
 
 namespace gfx
 {
@@ -21,14 +25,19 @@ class GraphicsPipelineBuilder
 public:
     GraphicsPipelineBuilder();
 
-    Pipeline build();
+    Pipeline build(Device* device);
+
+    void clear();
 
     // rendering attachments
     void setColorAttachmentFormats(std::span<VkFormat> colorFormats);
     void setDepthAttachmentFormat(VkFormat depthFromat);
 
     // rasterization info
-    void setShaderStages(VkShaderModule vertexShader, VkShaderModule fragmentShader);
+    void setShaderStages(
+        VkShaderModule vertexShader, std::string_view vertexEntryName,
+        VkShaderModule fragmentShader, std::string_view fragmentEntryName
+    );
 
     void setVertexInputState(
         std::span<VkVertexInputBindingDescription> bindingDesc,
@@ -51,12 +60,18 @@ public:
     void setDescriptorSetLayouts(std::span<VkDescriptorSetLayout> layouts);
 
 private:
+    void init();
+
     std::vector<VkPipelineShaderStageCreateInfo> shaderStages;
     std::vector<VkVertexInputBindingDescription> vertexBindingDesc;
     std::vector<VkVertexInputAttributeDescription> vertexAttribDesc;
     std::vector<VkFormat> colorAttachmentFormats;
     std::vector<VkPipelineColorBlendAttachmentState> blendAttachmentStates;
 
+    VkPushConstantRange pushConstants;
+    std::vector<VkDescriptorSetLayout> descriptorSetLayouts;
+
+    VkPipelineRenderingCreateInfo renderInfo;
     VkPipelineVertexInputStateCreateInfo vertexInputInfo;
     VkPipelineInputAssemblyStateCreateInfo inputAssemblyInfo;
     VkPipelineViewportStateCreateInfo viewportInfo; // leave null - use dynamic viewport
@@ -65,7 +80,6 @@ private:
     VkPipelineDepthStencilStateCreateInfo depthStencilInfo;
     VkPipelineColorBlendStateCreateInfo blendInfo;
     VkPipelineLayoutCreateInfo layoutInfo;
-    VkPipelineRenderingCreateInfo renderInfo;
 };
 
 } // namespace gfx
