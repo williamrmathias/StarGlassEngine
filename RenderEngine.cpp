@@ -20,14 +20,6 @@
 #include <filesystem>
 #include <chrono>
 
-// cgltf
-#define CGLTF_IMPLEMENTATION
-#include <cgltf.h>
-
-// stb
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
-
 namespace gfx
 {
 
@@ -936,17 +928,6 @@ VkShaderModule RenderEngine::loadShaderModule(const char* shaderPath)
     return resultShader;
 }
 
-struct ScopedGLTFData
-{
-    cgltf_data* data;
-
-    cgltf_data* operator->() const { return data; }
-
-    ~ScopedGLTFData()
-    {
-        cgltf_free(data);
-    }
-};
 
 void RenderEngine::initMaterialDescriptor(Material& material)
 {
