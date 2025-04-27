@@ -56,25 +56,6 @@ struct Vertex
     static std::array<VkVertexInputAttributeDescription, 4> getInputAttributeDescription();
 };
 
-struct MaterialConstants
-{
-    glm::vec4 baseColorFactor;
-    float metalnessFactor;
-    float roughnessFactor;
-};
-
-struct Material
-{
-    MaterialConstants constants;
-
-    Texture baseColorTex;
-    Texture metalRoughTex;
-
-    VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
-
-    void cleanup(Device* device);
-};
-
 struct MeshSurface
 {
     AllocatedBuffer vertexBuffer;
