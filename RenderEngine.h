@@ -56,16 +56,6 @@ struct Vertex
     static std::array<VkVertexInputAttributeDescription, 4> getInputAttributeDescription();
 };
 
-struct Texture
-{
-    AllocatedImage image;
-
-    VkSampler sampler;
-    VkImageView view;
-
-    void cleanup(Device* device);
-};
-
 struct MaterialConstants
 {
     glm::vec4 baseColorFactor;
@@ -196,6 +186,9 @@ public:
 
     GlobalSceneData& getGlobalSceneData() { return globalSceneData; }
 
+    VkCommandBuffer startImmediateCommands();
+    void endAndSubmitImmediateCommands();
+
 private:
     GlobalSceneData globalSceneData;
 
@@ -208,9 +201,6 @@ private:
     void initGeometryBuffers();
     void initGraphicsPipelines();
     void initImGui(SDL_Window* window);
-
-    VkCommandBuffer startImmediateCommands();
-    void endAndSubmitImmediateCommands();
 
     void renderImGui(VkCommandBuffer cmd, VkImageView colorAttachView, VkExtent2D renderExtent);
 
