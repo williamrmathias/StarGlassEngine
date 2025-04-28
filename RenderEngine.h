@@ -45,31 +45,6 @@ namespace gfx
 static const size_t NUM_FRAMES = 2;
 static const uint32_t NUM_MATERIALS_MAX = 10;
 
-struct Vertex
-{
-    glm::vec3 position;
-    glm::vec3 normal;
-    glm::vec2 uv;
-    glm::vec4 color;
-
-    static VkVertexInputBindingDescription getInputBindingDescription();
-    static std::array<VkVertexInputAttributeDescription, 4> getInputAttributeDescription();
-};
-
-struct MeshSurface
-{
-    AllocatedBuffer vertexBuffer;
-    AllocatedBuffer indexBuffer;
-
-    uint32_t vertexCount;
-    uint32_t indexCount;
-
-    VkPrimitiveTopology topology;
-    VkIndexType indexType;
-
-    Material material;
-};
-
 struct StaticMesh
 {
     std::vector<MeshSurface> surfaces;

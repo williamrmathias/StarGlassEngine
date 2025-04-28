@@ -17,6 +17,7 @@
 
 // stl
 #include <span>
+#include <utility>
 
 static AssetId getImageId(const cgltf_image& image)
 {
@@ -446,6 +447,283 @@ void LoadedGltf::loadMaterials(gfx::RenderEngine* engine, std::span<cgltf_materi
         materialMap[id] = handle;
 
         materials.push_back(newMaterial);
+    }
+}
+
+static AssetId getBufferId(const void* data, size_t dataSize)
+{
+    return util::fastHash(data, dataSize);
+}
+
+LoadedGltf::BufferDesc LoadedGltf::loadIndices(
+    gfx::RenderEngine* engine, cgltf_accessor& accessor
+)
+{
+    std::vector<uint8_t> indexData;
+
+    cgltf_size outComponentSize = cgltf_component_size(accessor.component_type);
+    cgltf_size indexCount = cgltf_accessor_unpack_indices(&accessor, nullptr, 0, 0);
+    indexData.resize(outComponentSize * indexCount);
+
+    // base vulkan only supports 16u and 32u indices
+    VkIndexType indexType = VK_INDEX_TYPE_UINT16;
+    switch (accessor.component_type)
+    {
+    case cgltf_component_type_r_16u:
+        indexType = VK_INDEX_TYPE_UINT16;
+        break;
+    case cgltf_component_type_r_32u:
+        indexType = VK_INDEX_TYPE_UINT32;
+        break;
+    default:
+        SDL_LogError(0, "Mesh load error: Mesh primitive contains invalid index format");
+        break;
+    }
+
+    cgltf_accessor_unpack_indices(&accessor, indexData.data(), outComponentSize, indexCount);
+
+    AssetId indexBufferId = getBufferId(indexData.data(), indexData.size() * sizeof(indexData[0]));
+
+    auto entry = bufferMap.find(indexBufferId);
+    if (entry != bufferMap.end())
+    {
+        // index buffer already exists; return it
+        return { entry->second, indexCount, outComponentSize };
+    }
+
+    // else, create the buffer
+    VkDeviceSize dataSize = static_cast<VkDeviceSize>(outComponentSize * indexCount);
+
+    // create and upload gpu buffer
+    gfx::AllocatedBuffer stagingBuffer = gfx::createAllocatedBuffer(
+        engine->device.get(), dataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+    );
+
+    gfx::writeToAllocatedBuffer(engine->device.get(), indexData.data(), dataSize, stagingBuffer);
+
+    gfx::AllocatedBuffer newBuffer = gfx::createAllocatedBuffer(
+        engine->device.get(), dataSize,
+        VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0
+    );
+
+    // copy staging to gpu only buffer
+    VkCommandBuffer cmd = engine->startImmediateCommands();
+    copyBufferToBuffer(cmd, stagingBuffer, newBuffer, dataSize);
+    engine->endAndSubmitImmediateCommands();
+
+    gfx::destroyAllocatedBuffer(engine->device.get(), stagingBuffer);
+
+    BufferHandle handle = buffers.size();
+    bufferMap[indexBufferId] = handle;
+    buffers.push_back(newBuffer);
+
+    return { handle, indexCount };
+}
+
+LoadedGltf::BufferDesc LoadedGltf::loadVertices(
+    gfx::RenderEngine* engine, cgltf_primitive& primitive
+)
+{
+    std::vector<Vertex> vertexData;
+
+    std::vector<float> positionData;
+    std::vector<float> normalData;
+    std::vector<float> uvData;
+    std::vector<float> colorData;
+
+    // position
+    {
+        const cgltf_accessor* positionAcc = cgltf_find_accessor(
+            &primitive, cgltf_attribute_type_position, 0
+        );
+
+        if (positionAcc == nullptr)
+        {
+            SDL_LogError(0, "Mesh load error: Surface position attrib invalid");
+            return { invalidAssetId, 0 };
+        }
+
+        cgltf_size positionCount = cgltf_accessor_unpack_floats(positionAcc, nullptr, 0);
+        positionData.resize(positionCount);
+        cgltf_accessor_unpack_floats(positionAcc, positionData.data(), positionCount);
+    }
+
+    // normal
+    bool hasNormal = false;
+    {
+        const cgltf_accessor* normalAcc = cgltf_find_accessor(
+            &primitive, cgltf_attribute_type_normal, 0
+        );
+
+        if (normalAcc != nullptr)
+        {
+            hasNormal = true;
+            cgltf_size normalCount = cgltf_accessor_unpack_floats(normalAcc, nullptr, 0);
+            normalData.resize(normalCount);
+            cgltf_accessor_unpack_floats(normalAcc, normalData.data(), normalCount);
+        }
+    }
+
+    // uv
+    bool hasUv = false;
+    {
+        const cgltf_accessor* uvAcc = cgltf_find_accessor(
+            &primitive, cgltf_attribute_type_texcoord, 0
+        );
+
+        if (uvAcc != nullptr)
+        {
+            hasUv = true;
+            cgltf_size uvCount = cgltf_accessor_unpack_floats(uvAcc, nullptr, 0);
+            uvData.resize(uvCount);
+            cgltf_accessor_unpack_floats(uvAcc, uvData.data(), uvCount);
+        }
+    }
+
+    // color
+    cgltf_size colorChannels = 0;
+    {
+        const cgltf_accessor* colorAcc = cgltf_find_accessor(
+            &primitive, cgltf_attribute_type_color, 0
+        );
+
+        if (colorAcc != nullptr)
+        {
+            colorChannels = cgltf_num_components(colorAcc->type);
+            cgltf_size colorCount = cgltf_accessor_unpack_floats(colorAcc, nullptr, 0);
+            colorData.resize(colorCount);
+            cgltf_accessor_unpack_floats(colorAcc, colorData.data(), colorCount);
+        }
+    }
+
+    // assemble attribs
+    size_t vertexCount = positionData.size() / 3;
+    {
+        vertexData.resize(vertexCount);
+        for (size_t i = 0; i < vertexCount; i++)
+        {
+            vertexData[i].position = glm::make_vec3(&positionData[3 * i]);
+
+            if (hasNormal)
+                vertexData[i].normal = glm::make_vec3(&normalData[3 * i]);
+            else
+                vertexData[i].normal = glm::vec3{ 0.f, 0.f, 1.f };
+
+            if (hasUv)
+                vertexData[i].uv = glm::make_vec2(&uvData[2 * i]);
+            else
+                vertexData[i].uv = glm::vec2{ 0.f, 0.f };
+
+            if (colorChannels == 4)
+                vertexData[i].color = glm::make_vec4(&colorData[4 * i]);
+            else if (colorChannels == 3)
+                vertexData[i].color = glm::vec4{ glm::make_vec3(&colorData[3 * i]), 1.f };
+            else
+                vertexData[i].color = glm::vec4{ 1.f, 1.f, 1.f, 1.f }; // colors aren't specified with less than 3 channels
+        }
+    }
+
+    // check asset store
+    AssetId vertexBufferId = getBufferId(vertexData.data(), vertexData.size() * sizeof(vertexData[0]));
+
+    auto entry = bufferMap.find(vertexBufferId);
+    if (entry != bufferMap.end())
+    {
+        // index buffer already exists; return it
+        return { entry->second, vertexCount };
+    }
+
+    // else, create and upload the buffer
+    VkDeviceSize dataSize = static_cast<VkDeviceSize>(sizeof(vertexData[0]) * vertexCount);
+
+    // create and upload gpu buffer
+    gfx::AllocatedBuffer stagingBuffer = gfx::createAllocatedBuffer(
+        engine->device.get(), dataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+    );
+
+    gfx::writeToAllocatedBuffer(engine->device.get(), vertexData.data(), dataSize, stagingBuffer);
+
+    gfx::AllocatedBuffer newBuffer = gfx::createAllocatedBuffer(
+        engine->device.get(), dataSize,
+        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0
+    );
+
+    // copy staging to gpu only buffer
+    VkCommandBuffer cmd = engine->startImmediateCommands();
+    copyBufferToBuffer(cmd, stagingBuffer, newBuffer, dataSize);
+    engine->endAndSubmitImmediateCommands();
+
+    gfx::destroyAllocatedBuffer(engine->device.get(), stagingBuffer);
+
+    // store buffer
+    BufferHandle handle = buffers.size();
+    bufferMap[vertexBufferId] = handle;
+    buffers.push_back(newBuffer);
+
+    return { handle, vertexCount };
+}
+
+static AssetId getPrimitiveId(MeshPrimitive& primitive) 
+{
+    // you basically have to reconstruct a primitive to be able to get it's hash
+    // seems slow, but still allows deduplication
+    AssetId primitiveId = primitive.vertexBuffer;
+    util::hashCombine(primitiveId, primitive.indexBuffer);
+    util::hashCombine(primitiveId, primitive.material);
+}
+
+// Index and Vertex Buffers are loaded on demand (not ahead like images)
+// Meaning they aren't loaded until the first primitive that needs it is processed
+void LoadedGltf::loadMeshes(gfx::RenderEngine* engine, std::span<cgltf_mesh> gltfMeshes)
+{
+    for (const cgltf_mesh& mesh : gltfMeshes)
+    {
+        for (cgltf_size i = 0; i < mesh.primitives_count; i++)
+        {
+            cgltf_primitive& primitive = mesh.primitives[i];
+
+            MeshPrimitive newPrimitive;
+
+            // TODO: Implement rendering all topology types
+            switch (primitive.type)
+            {
+            case cgltf_primitive_type_triangles:
+                newPrimitive.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+                break;
+            default:
+                SDL_LogError(0, "Mesh load error: Mesh primitive contains invalid topology");
+                return;
+            }
+
+            // get index buffer
+            newPrimitive.indexBuffer = invalidAssetId;
+            if (primitive.indices)
+            {
+                // TODO: Support non index geometrys
+                BufferDesc indexDesc = loadIndices(engine, *primitive.indices);
+                newPrimitive.indexBuffer = indexDesc.handle;
+                newPrimitive.indexCount = indexDesc.numElements;
+                newPrimitive.indexType = indexDesc.elementSize == 4 ? 
+                    VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
+            }
+
+            // get vertex buffer
+            {
+                BufferDesc vertexDesc = loadVertices(engine, primitive);
+                newPrimitive.vertexBuffer = vertexDesc.handle;
+                newPrimitive.vertexCount = vertexDesc.numElements;
+            }
+
+            // get material
+            newPrimitive.material = invalidAssetId;
+            if (primitive.material)
+            {
+                newPrimitive.material = materialMap[getMaterialId(*primitive.material)];
+            }
+            // TODO: Default material
+        }
     }
 }
 
