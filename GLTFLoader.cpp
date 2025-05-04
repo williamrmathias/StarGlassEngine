@@ -455,7 +455,7 @@ static AssetId getBufferId(const void* data, size_t dataSize)
     return util::fastHash(data, dataSize);
 }
 
-LoadedGltf::BufferDesc LoadedGltf::loadIndices(
+LoadedGltf::BufferDesc LoadedGltf::loadIndexBuffer(
     gfx::RenderEngine* engine, cgltf_accessor& accessor
 )
 {
@@ -521,8 +521,8 @@ LoadedGltf::BufferDesc LoadedGltf::loadIndices(
     return { handle, indexCount };
 }
 
-LoadedGltf::BufferDesc LoadedGltf::loadVertices(
-    gfx::RenderEngine* engine, cgltf_primitive& primitive
+LoadedGltf::BufferDesc LoadedGltf::loadVertexBuffer(
+    gfx::RenderEngine* engine, const cgltf_primitive& primitive
 )
 {
     std::vector<Vertex> vertexData;
@@ -665,25 +665,62 @@ LoadedGltf::BufferDesc LoadedGltf::loadVertices(
     return { handle, vertexCount };
 }
 
-static AssetId getPrimitiveId(MeshPrimitive& primitive) 
+uint64_t MeshPrimitive::getHash() const
 {
-    // you basically have to reconstruct a primitive to be able to get it's hash
-    // seems slow, but still allows deduplication
-    AssetId primitiveId = primitive.vertexBuffer;
-    util::hashCombine(primitiveId, primitive.indexBuffer);
-    util::hashCombine(primitiveId, primitive.material);
-
-    uint32_t data[] = { 
-        primitive.vertexCount, primitive.indexCount, primitive.topology, primitive.indexType 
-    };
-    util::hashCombine(primitiveId, util::fastHash(data, 4 * sizeof(data[0])));
+    assert(sizeof(MeshPrimitive) == 40); // if size changes, check hash
+    return util::fastHash(this, sizeof(MeshPrimitive));
 }
 
-static AssetId getMeshId(Mesh& mesh)
+MeshPrimitive LoadedGltf::createMeshPrimitive(gfx::RenderEngine* engine, const cgltf_primitive& primitive)
+{
+    MeshPrimitive newPrimitive;
+
+    // TODO: Implement rendering all topology types
+    switch (primitive.type)
+    {
+    case cgltf_primitive_type_triangles:
+        newPrimitive.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        break;
+    default:
+        SDL_LogError(0, "Mesh load error: Mesh primitive contains invalid topology");
+        return;
+    }
+
+    // get index buffer
+    newPrimitive.indexBuffer = invalidAssetId;
+    if (primitive.indices)
+    {
+        // TODO: Support non index geometrys
+        BufferDesc indexDesc = loadIndexBuffer(engine, *primitive.indices);
+        newPrimitive.indexBuffer = indexDesc.handle;
+        newPrimitive.indexCount = indexDesc.numElements;
+        newPrimitive.indexType = indexDesc.elementSize == 4 ?
+            VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
+    }
+
+    // get vertex buffer
+    {
+        BufferDesc vertexDesc = loadVertexBuffer(engine, primitive);
+        newPrimitive.vertexBuffer = vertexDesc.handle;
+        newPrimitive.vertexCount = vertexDesc.numElements;
+    }
+
+    // get material
+    newPrimitive.material = invalidAssetId;
+    if (primitive.material)
+    {
+        newPrimitive.material = materialMap[getMaterialId(*primitive.material)];
+    }
+    // TODO: Default material
+
+    return newPrimitive;
+}
+
+static AssetId getMeshId(std::span<MeshPrimitive> primitives)
 {
     AssetId meshId = 0;
-    for (const auto& primitive : mesh.primitives)
-        util::hashCombine(meshId, primitive);
+    for (const auto& primitive : primitives)
+        util::hashCombine(meshId, primitive.getHash());
 
     return meshId;
 }
@@ -694,61 +731,21 @@ void LoadedGltf::loadMeshes(gfx::RenderEngine* engine, std::span<cgltf_mesh> glt
 {
     for (const cgltf_mesh& mesh : gltfMeshes)
     {
+        Mesh newMesh;
+        newMesh.primitives.resize(mesh.primitives_count);
+        AssetId meshId = 0;
+
         for (cgltf_size i = 0; i < mesh.primitives_count; i++)
         {
             cgltf_primitive& primitive = mesh.primitives[i];
-
-            MeshPrimitive newPrimitive;
-
-            // TODO: Implement rendering all topology types
-            switch (primitive.type)
-            {
-            case cgltf_primitive_type_triangles:
-                newPrimitive.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-                break;
-            default:
-                SDL_LogError(0, "Mesh load error: Mesh primitive contains invalid topology");
-                return;
-            }
-
-            // get index buffer
-            newPrimitive.indexBuffer = invalidAssetId;
-            if (primitive.indices)
-            {
-                // TODO: Support non index geometrys
-                BufferDesc indexDesc = loadIndices(engine, *primitive.indices);
-                newPrimitive.indexBuffer = indexDesc.handle;
-                newPrimitive.indexCount = indexDesc.numElements;
-                newPrimitive.indexType = indexDesc.elementSize == 4 ? 
-                    VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
-            }
-
-            // get vertex buffer
-            {
-                BufferDesc vertexDesc = loadVertices(engine, primitive);
-                newPrimitive.vertexBuffer = vertexDesc.handle;
-                newPrimitive.vertexCount = vertexDesc.numElements;
-            }
-
-            // get material
-            newPrimitive.material = invalidAssetId;
-            if (primitive.material)
-            {
-                newPrimitive.material = materialMap[getMaterialId(*primitive.material)];
-            }
-            // TODO: Default material
+            MeshPrimitive newPrimitive = createMeshPrimitive(engine, primitive);
 
             // store primitive
-            AssetId primitiveId = getPrimitiveId(newPrimitive);
-            PrimitiveHandle handle = primitives.size();
-            primitiveMap[primitiveId] = handle;
-            primitives.push_back(newPrimitive);
-
-            newMesh.primitives.push_back(handle);
+            newMesh.primitives.push_back(newPrimitive);
+            util::hashCombine(meshId, newPrimitive.getHash());
         }
 
         // store mesh
-        AssetId meshId = getMeshId(newMesh);
         MeshHandle handle = meshes.size();
         meshMap[meshId] = handle;
         meshes.push_back(newMesh);
@@ -801,4 +798,5 @@ LoadedGltf::LoadedGltf(gfx::RenderEngine* engine, std::string_view gltfPath)
     loadSamplers(engine, { gltfData->samplers, gltfData->samplers_count });
     loadTextures(engine, { gltfData->textures, gltfData->textures_count });
     loadMaterials(engine, { gltfData->materials, gltfData->materials_count });
+    loadMeshes(engine, { gltfData->meshes, gltfData->meshes_count });
 }
