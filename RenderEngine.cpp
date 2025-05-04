@@ -33,17 +33,15 @@ void RenderEngine::init(SDL_Window* window)
 
     initDescriptorPool();
 
-    initGlobalSceneData();
-
     initImmediateStructures();
 
     initFrameData();
 
-    initGeometryBuffers();
-
     initGraphicsPipelines();
 
     initImGui(window);
+
+    initScene();
 }
 
 void RenderEngine::render()
@@ -162,52 +160,7 @@ void RenderEngine::render()
     // bind pipeline
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline.pipeline);
 
-    //// draw static mesh
-    //if (staticMesh.has_value())
-    //{
-    //    for (MeshSurface& surface : staticMesh.value().surfaces)
-    //    {
-    //        VkDeviceSize vertexBufferOffset{ 0 };
-    //        vkCmdBindVertexBuffers(cmd, 0, 1, &surface.vertexBuffer.buffer, &vertexBufferOffset);
-
-    //        VkDeviceSize indexBufferOffset{ 0 };
-    //        vkCmdBindIndexBuffer(cmd, surface.indexBuffer.buffer, indexBufferOffset, surface.indexType);
-
-    //        // bind material
-    //        vkCmdBindDescriptorSets(
-    //            cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline.layout, 1, 1, 
-    //            &surface.material.descriptorSet, 0, nullptr
-    //        );
-
-    //        // set push constants
-    //        static float angle = 0.f;
-    //        glm::mat4 model = glm::identity<glm::mat4>();
-    //        model = glm::translate(model, glm::vec3(0.f, 0.f, 3.f));
-    //        model = glm::rotate(
-    //            model,
-    //            glm::radians(angle),
-    //            glm::vec3(0.f, 1.f, 0.f)
-    //        );
-
-    //        PushConstants pushConstants{
-    //            .model = model,
-    //            .material = surface.material.constants
-    //        };
-
-    //        vkCmdPushConstants(
-    //            cmd,
-    //            activePipeline.layout,
-    //            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-    //            0,
-    //            sizeof(PushConstants),
-    //            &pushConstants
-    //        );
-
-    //        angle += 0.1f;
-
-    //        vkCmdDrawIndexed(cmd, surface.indexCount, 1, 0, 0, 0);
-    //    }
-    //}
+    drawScene(cmd);
 
     // end rendering
     vkCmdEndRendering(cmd);
@@ -564,25 +517,6 @@ void RenderEngine::initDescriptorPool()
     VK_Check(vkCreateDescriptorPool(device->device, &poolInfo, nullptr, &globalDescriptorPool));
 }
 
-void RenderEngine::initGlobalSceneData()
-{
-    // set constants
-    glm::mat4 view =
-        glm::lookAt(glm::vec3(0.f, 1.f, 0.f), glm::vec3(0.f, 0.f, 3.f), glm::vec3(0, 1.f, 0));
-
-    glm::mat4 projection = glm::perspective(glm::radians(45.f), 1280.f / 720.f, 0.1f, 100.f);
-    projection[1][1] *= -1; // correct gl -> vk
-
-    globalSceneData = GlobalSceneData{
-        .viewproj = projection * view,
-        .viewPosition = glm::vec3{0.f, 0.f, 0.f},
-        .lightDirection = glm::vec3{0.f, 1.f, 0.f},
-        .lightColor = glm::vec3{1.f, 1.f, 1.f}
-    };
-
-    setSunDirection(0.f, 0.f);
-}
-
 void RenderEngine::initImmediateStructures()
 {
     // create command pools
@@ -702,13 +636,6 @@ void RenderEngine::initFrameData()
     }
 }
 
-void RenderEngine::initGeometryBuffers()
-{
-    // load cube mesh
-    //std::filesystem::path boxPath = std::filesystem::current_path() / std::filesystem::path("Assets/BoxTextured.glb");
-    //staticMesh = loadStaticMesh(boxPath.string().c_str());
-}
-
 void RenderEngine::initGraphicsPipelines()
 {
     GraphicsPipelineBuilder pipelineBuilder;
@@ -811,6 +738,71 @@ void RenderEngine::initImGui(SDL_Window* window)
     ImGui_ImplVulkan_Init(&init_info);
 
     ImGui_ImplVulkan_CreateFontsTexture();
+}
+
+void RenderEngine::initScene()
+{
+    // set global scene constants
+    glm::mat4 view =
+        glm::lookAt(glm::vec3(0.f, 1.f, 0.f), glm::vec3(0.f, 0.f, 3.f), glm::vec3(0, 1.f, 0));
+
+    glm::mat4 projection = glm::perspective(glm::radians(45.f), 1280.f / 720.f, 0.1f, 100.f);
+    projection[1][1] *= -1; // correct gl -> vk
+
+    globalSceneData = GlobalSceneData{
+        .viewproj = projection * view,
+        .viewPosition = glm::vec3{0.f, 0.f, 0.f},
+        .lightDirection = glm::vec3{0.f, 1.f, 0.f},
+        .lightColor = glm::vec3{1.f, 1.f, 1.f}
+    };
+
+    setSunDirection(0.f, 0.f);
+
+    // load gltf
+    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/BoxTextured.glb");
+    loadedGltf = std::make_unique<LoadedGltf>(this, gltfPath);
+}
+
+void RenderEngine::drawScene(VkCommandBuffer cmd)
+{
+    for (const MeshNode& meshNode : loadedGltf->scene.nodes)
+    {
+        const Mesh& mesh = loadedGltf->meshes[meshNode.mesh];
+
+        for (const MeshPrimitive& primitive : mesh.primitives)
+        {
+            // bind geometry buffers
+            gfx::AllocatedBuffer vertexBuffer = loadedGltf->buffers[primitive.vertexBuffer];
+            VkDeviceSize vertexBufferOffset{ 0 };
+            vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer.buffer, &vertexBufferOffset);
+
+            gfx::AllocatedBuffer indexBuffer = loadedGltf->buffers[primitive.indexBuffer];
+            VkDeviceSize indexBufferOffset{ 0 };
+            vkCmdBindIndexBuffer(cmd, indexBuffer.buffer, indexBufferOffset, primitive.indexType);
+
+            // bind material
+            const Material& material = loadedGltf->materials[primitive.material];
+            vkCmdBindDescriptorSets(
+                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline.layout, 
+                1, 1, &material.descriptorSet, 0, nullptr
+            );
+
+            // bind push constants
+            PushConstants pushConstants{
+                .model = meshNode.transform,
+                .material = material.constants
+            };
+
+            vkCmdPushConstants(
+                cmd, activePipeline.layout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                sizeof(pushConstants), &pushConstants
+            );
+
+            // draw primitive
+            vkCmdDrawIndexed(cmd, primitive.indexCount, 1, 0, 0, 0);
+        }
+    }
 }
 
 void RenderEngine::renderImGui(

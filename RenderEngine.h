@@ -74,7 +74,7 @@ class RenderEngine
 public:
 
     std::unique_ptr<Device> device;
-    std::unique_ptr<LoadedGltf> LoadedGltf;
+    std::unique_ptr<LoadedGltf> loadedGltf;
 
     VkCommandPool immediateCommandPool;
     VkCommandBuffer immediateCommandBuffer;
@@ -144,13 +144,13 @@ private:
     void initColorTarget();
     void initDepthTarget();
     void initDescriptorPool();
-    void initGlobalSceneData();
     void initImmediateStructures();
     void initFrameData();
-    void initGeometryBuffers();
     void initGraphicsPipelines();
     void initImGui(SDL_Window* window);
+    void initScene();
 
+    void drawScene(VkCommandBuffer cmd);
     void renderImGui(VkCommandBuffer cmd, VkImageView colorAttachView, VkExtent2D renderExtent);
 
     FrameData& getCurrentFrameData();
