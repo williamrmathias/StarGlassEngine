@@ -672,6 +672,20 @@ static AssetId getPrimitiveId(MeshPrimitive& primitive)
     AssetId primitiveId = primitive.vertexBuffer;
     util::hashCombine(primitiveId, primitive.indexBuffer);
     util::hashCombine(primitiveId, primitive.material);
+
+    uint32_t data[] = { 
+        primitive.vertexCount, primitive.indexCount, primitive.topology, primitive.indexType 
+    };
+    util::hashCombine(primitiveId, util::fastHash(data, 4 * sizeof(data[0])));
+}
+
+static AssetId getMeshId(Mesh& mesh)
+{
+    AssetId meshId = 0;
+    for (const auto& primitive : mesh.primitives)
+        util::hashCombine(meshId, primitive);
+
+    return meshId;
 }
 
 // Index and Vertex Buffers are loaded on demand (not ahead like images)
@@ -723,7 +737,30 @@ void LoadedGltf::loadMeshes(gfx::RenderEngine* engine, std::span<cgltf_mesh> glt
                 newPrimitive.material = materialMap[getMaterialId(*primitive.material)];
             }
             // TODO: Default material
+
+            // store primitive
+            AssetId primitiveId = getPrimitiveId(newPrimitive);
+            PrimitiveHandle handle = primitives.size();
+            primitiveMap[primitiveId] = handle;
+            primitives.push_back(newPrimitive);
+
+            newMesh.primitives.push_back(handle);
         }
+
+        // store mesh
+        AssetId meshId = getMeshId(newMesh);
+        MeshHandle handle = meshes.size();
+        meshMap[meshId] = handle;
+        meshes.push_back(newMesh);
+    }
+}
+
+void LoadedGltf::loadNodes(gfx::RenderEngine* engine, std::span<cgltf_node> gltfNodes)
+{
+    MeshNode newNode;
+    for (const cgltf_node& node : gltfNodes)
+    {
+
     }
 }
 

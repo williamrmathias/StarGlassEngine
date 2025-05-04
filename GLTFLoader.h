@@ -19,6 +19,7 @@ using SamplerHandle = uint64_t;
 using TextureHandle = uint64_t;
 using MaterialHandle = uint64_t;
 using PrimitiveHandle = uint64_t;
+using MeshHandle = uint64_t;
 
 struct Texture
 {
@@ -73,6 +74,27 @@ struct MeshPrimitive
     MaterialHandle material;
 };
 
+struct Mesh
+{
+    BufferHandle vertexBuffer;
+    BufferHandle indexBuffer;
+
+    std::vector<PrimitiveHandle> primitives;
+};
+
+struct Transform
+{
+    glm::vec3 translation;
+    glm::quat rotation;
+    glm::vec3 scale;
+};
+
+struct MeshNode
+{
+    MeshHandle mesh;
+    Transform transform;
+};
+
 /*
 * A GLTF file loaded into CPU memory
 */
@@ -96,8 +118,7 @@ public:
     std::vector<Material> materials;
     std::unordered_map<AssetId, MaterialHandle> materialMap;
 
-    std::vector<MeshPrimitive> primitives;
-    std::unordered_map<AssetId, PrimitiveHandle> primitiveMap;
+    std::vector<MeshNode> meshNodes;
 
 private:
     void loadImages(gfx::RenderEngine* engine, std::span<cgltf_image> gltfImages);
@@ -114,7 +135,9 @@ private:
         size_t elementSize;
     };
 
-    BufferDesc loadIndices(gfx::RenderEngine* engine, cgltf_accessor& accessor);
-    BufferDesc loadVertices(gfx::RenderEngine* engine, cgltf_primitive& primitive);
-    void loadMeshes(gfx::RenderEngine* engine, std::span<cgltf_mesh> gltfMeshes);
+    BufferDesc getOrLoadIndexBuffer(gfx::RenderEngine* engine, cgltf_accessor& accessor);
+    BufferDesc getOrLoadVertexBuffer(gfx::RenderEngine* engine, cgltf_primitive& primitive);
+    void loadMeshBuffers(gfx::RenderEngine* engine, std::span<cgltf_mesh> gltfMeshes);
+
+    void loadNodes(gfx::RenderEngine* engine, std::span<cgltf_node> gltfNodes);
 };
