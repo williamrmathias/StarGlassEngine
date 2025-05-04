@@ -14,6 +14,7 @@
 
 // glm
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtx/quaternion.hpp>
 
 // stl
 #include <span>
@@ -51,9 +52,7 @@ struct ScopedSTBImage
 
 // all images are loaded in format r8g8b8a8 unorm
 // they're all uploaded to the GPU at the return of this function
-void LoadedGltf::loadImages(
-    gfx::RenderEngine* engine, std::span<cgltf_image> gltfImages
-)
+void LoadedGltf::loadImages(std::span<cgltf_image> gltfImages)
 {
     images.reserve(gltfImages.size());
 
@@ -204,9 +203,7 @@ static AssetId getSamplerId(const cgltf_sampler& sampler)
     return util::fastHash(data, 4 * sizeof(data[0]));
 }
 
-void LoadedGltf::loadSamplers(
-    gfx::RenderEngine* engine, std::span<cgltf_sampler> gltfSamplers
-)
+void LoadedGltf::loadSamplers(std::span<cgltf_sampler> gltfSamplers)
 {
     samplers.reserve(gltfSamplers.size());
 
@@ -246,9 +243,7 @@ static AssetId getTextureId(const cgltf_texture& texture)
     return imageId;
 }
 
-void LoadedGltf::loadTextures(
-    gfx::RenderEngine* engine, std::span<cgltf_texture> gltfTextures
-)
+void LoadedGltf::loadTextures(std::span<cgltf_texture> gltfTextures)
 {
     textures.reserve(textures.size());
 
@@ -332,7 +327,7 @@ static AssetId getMaterialId(const cgltf_material& material)
     return invalidAssetId;
 }
 
-void LoadedGltf::setMaterialDescriptor(gfx::RenderEngine* engine, Material& material)
+void LoadedGltf::setMaterialDescriptor(Material& material)
 {
     // allocate descriptor set
     VkDescriptorSetAllocateInfo allocInfo{
@@ -396,7 +391,7 @@ void LoadedGltf::setMaterialDescriptor(gfx::RenderEngine* engine, Material& mate
     );
 }
 
-void LoadedGltf::loadMaterials(gfx::RenderEngine* engine, std::span<cgltf_material> gltfMaterials)
+void LoadedGltf::loadMaterials(std::span<cgltf_material> gltfMaterials)
 {
     materials.reserve(materials.size());
 
@@ -440,7 +435,7 @@ void LoadedGltf::loadMaterials(gfx::RenderEngine* engine, std::span<cgltf_materi
         // TODO: Other material types
 
         // create descriptor set
-        setMaterialDescriptor(engine, newMaterial);
+        setMaterialDescriptor(newMaterial);
 
         MaterialHandle handle = materials.size();
         AssetId id = getMaterialId(material);
@@ -455,9 +450,7 @@ static AssetId getBufferId(const void* data, size_t dataSize)
     return util::fastHash(data, dataSize);
 }
 
-LoadedGltf::BufferDesc LoadedGltf::loadIndexBuffer(
-    gfx::RenderEngine* engine, cgltf_accessor& accessor
-)
+LoadedGltf::BufferDesc LoadedGltf::loadIndexBuffer(cgltf_accessor& accessor)
 {
     std::vector<uint8_t> indexData;
 
@@ -521,9 +514,7 @@ LoadedGltf::BufferDesc LoadedGltf::loadIndexBuffer(
     return { handle, indexCount };
 }
 
-LoadedGltf::BufferDesc LoadedGltf::loadVertexBuffer(
-    gfx::RenderEngine* engine, const cgltf_primitive& primitive
-)
+LoadedGltf::BufferDesc LoadedGltf::loadVertexBuffer(const cgltf_primitive& primitive)
 {
     std::vector<Vertex> vertexData;
 
@@ -671,7 +662,7 @@ uint64_t MeshPrimitive::getHash() const
     return util::fastHash(this, sizeof(MeshPrimitive));
 }
 
-MeshPrimitive LoadedGltf::createMeshPrimitive(gfx::RenderEngine* engine, const cgltf_primitive& primitive)
+MeshPrimitive LoadedGltf::createMeshPrimitive(const cgltf_primitive& primitive)
 {
     MeshPrimitive newPrimitive;
 
@@ -691,7 +682,7 @@ MeshPrimitive LoadedGltf::createMeshPrimitive(gfx::RenderEngine* engine, const c
     if (primitive.indices)
     {
         // TODO: Support non index geometrys
-        BufferDesc indexDesc = loadIndexBuffer(engine, *primitive.indices);
+        BufferDesc indexDesc = loadIndexBuffer(*primitive.indices);
         newPrimitive.indexBuffer = indexDesc.handle;
         newPrimitive.indexCount = indexDesc.numElements;
         newPrimitive.indexType = indexDesc.elementSize == 4 ?
@@ -700,7 +691,7 @@ MeshPrimitive LoadedGltf::createMeshPrimitive(gfx::RenderEngine* engine, const c
 
     // get vertex buffer
     {
-        BufferDesc vertexDesc = loadVertexBuffer(engine, primitive);
+        BufferDesc vertexDesc = loadVertexBuffer(primitive);
         newPrimitive.vertexBuffer = vertexDesc.handle;
         newPrimitive.vertexCount = vertexDesc.numElements;
     }
@@ -727,7 +718,7 @@ static AssetId getMeshId(std::span<MeshPrimitive> primitives)
 
 // Index and Vertex Buffers are loaded on demand (not ahead like images)
 // Meaning they aren't loaded until the first primitive that needs it is processed
-void LoadedGltf::loadMeshes(gfx::RenderEngine* engine, std::span<cgltf_mesh> gltfMeshes)
+void LoadedGltf::loadMeshes(std::span<cgltf_mesh> gltfMeshes)
 {
     for (const cgltf_mesh& mesh : gltfMeshes)
     {
@@ -738,7 +729,7 @@ void LoadedGltf::loadMeshes(gfx::RenderEngine* engine, std::span<cgltf_mesh> glt
         for (cgltf_size i = 0; i < mesh.primitives_count; i++)
         {
             cgltf_primitive& primitive = mesh.primitives[i];
-            MeshPrimitive newPrimitive = createMeshPrimitive(engine, primitive);
+            MeshPrimitive newPrimitive = createMeshPrimitive(primitive);
 
             // store primitive
             newMesh.primitives.push_back(newPrimitive);
@@ -752,12 +743,69 @@ void LoadedGltf::loadMeshes(gfx::RenderEngine* engine, std::span<cgltf_mesh> glt
     }
 }
 
-void LoadedGltf::loadNodes(gfx::RenderEngine* engine, std::span<cgltf_node> gltfNodes)
+static glm::mat4 getNodeMatrix(const cgltf_node& node, const glm::mat4& parentTransform)
 {
-    MeshNode newNode;
-    for (const cgltf_node& node : gltfNodes)
-    {
+    if (node.has_matrix)
+        return parentTransform * glm::make_mat4(node.matrix);
 
+    glm::mat4 transform = glm::identity<glm::mat4>();
+    if (node.has_scale)
+        glm::scale(transform, glm::make_vec3(node.scale));
+
+    if (node.has_rotation)
+    {
+        glm::quat rotation = glm::make_quat(node.rotation);
+        transform *= glm::toMat4(rotation);
+    }
+
+    if (node.has_translation)
+        glm::translate(transform, glm::make_vec3(node.translation));
+
+    return parentTransform * transform;
+}
+
+MeshNode LoadedGltf::createMeshNode(const cgltf_mesh& mesh, const glm::mat4& transform)
+{
+    MeshNode newMeshNode{ .mesh = invalidAssetId, .transform = transform };
+
+    std::vector<MeshPrimitive> primitives(mesh.primitives_count);
+    for (cgltf_size i = 0; i < mesh.primitives_count; i++)
+        primitives[i] = createMeshPrimitive(mesh.primitives[i]);
+
+    AssetId meshId = getMeshId(primitives);
+    newMeshNode.mesh = meshMap[meshId];
+}
+
+void LoadedGltf::loadScene(const cgltf_scene& gltfScene)
+{
+    Scene newScene;
+    std::vector<cgltf_node*> nodeStack;
+    std::vector<glm::mat4> transformStack;
+    for (cgltf_size i = 0; i < gltfScene.nodes_count; i++)
+    {
+        nodeStack.push_back(gltfScene.nodes[i]);
+        transformStack.push_back(glm::identity<glm::mat4>());
+        while (!nodeStack.empty())
+        {
+            cgltf_node* node = nodeStack.back();
+            nodeStack.pop_back();
+
+            glm::mat4 parentTransform = transformStack.back();
+            transformStack.pop_back();
+
+            glm::mat4 transform = getNodeMatrix(*node, parentTransform);
+            if (node->mesh)
+            {
+                newScene.nodes.push_back(createMeshNode(*node->mesh, transform));
+            }
+
+            // add children to stack to recurse
+            for (cgltf_size child = 0; child < node->children_count; child++)
+            {
+                nodeStack.push_back(node->children[child]);
+                transformStack.push_back(transform); // a copy of the transform for each child
+            }
+        }
     }
 }
 
@@ -773,7 +821,8 @@ struct ScopedGLTFData
     }
 };
 
-LoadedGltf::LoadedGltf(gfx::RenderEngine* engine, std::string_view gltfPath)
+LoadedGltf::LoadedGltf(gfx::RenderEngine* renderEngine, std::string_view gltfPath)
+    : engine(renderEngine)
 {
     cgltf_options options{}; // default loading options
     ScopedGLTFData gltfData;
@@ -794,9 +843,12 @@ LoadedGltf::LoadedGltf(gfx::RenderEngine* engine, std::string_view gltfPath)
         std::abort();
     }
 
-    loadImages(engine, { gltfData->images, gltfData->images_count });
-    loadSamplers(engine, { gltfData->samplers, gltfData->samplers_count });
-    loadTextures(engine, { gltfData->textures, gltfData->textures_count });
-    loadMaterials(engine, { gltfData->materials, gltfData->materials_count });
-    loadMeshes(engine, { gltfData->meshes, gltfData->meshes_count });
+    loadImages({ gltfData->images, gltfData->images_count });
+    loadSamplers({ gltfData->samplers, gltfData->samplers_count });
+    loadTextures({ gltfData->textures, gltfData->textures_count });
+    loadMaterials({ gltfData->materials, gltfData->materials_count });
+    loadMeshes({ gltfData->meshes, gltfData->meshes_count });
+
+    if (gltfData->scene)
+        loadScene(*gltfData->scene);
 }

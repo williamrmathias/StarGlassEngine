@@ -80,17 +80,15 @@ struct Mesh
     std::vector<MeshPrimitive> primitives;
 };
 
-struct Transform
-{
-    glm::vec3 translation;
-    glm::quat rotation;
-    glm::vec3 scale;
-};
-
 struct MeshNode
 {
     MeshHandle mesh;
-    Transform transform;
+    glm::mat4 transform;
+};
+
+struct Scene
+{
+    std::vector<MeshNode> nodes;
 };
 
 /*
@@ -99,7 +97,7 @@ struct MeshNode
 class LoadedGltf
 {
 public:
-    LoadedGltf(gfx::RenderEngine* engine, std::string_view gltfPath);
+    LoadedGltf(gfx::RenderEngine* renderEngine, std::string_view gltfPath);
 
     std::vector<gfx::AllocatedBuffer> buffers;
     std::unordered_map<AssetId, BufferHandle> bufferMap;
@@ -119,13 +117,17 @@ public:
     std::vector<Mesh> meshes;
     std::unordered_map<AssetId, MeshHandle> meshMap;
 
-private:
-    void loadImages(gfx::RenderEngine* engine, std::span<cgltf_image> gltfImages);
-    void loadSamplers(gfx::RenderEngine* engine, std::span<cgltf_sampler> gltfSamplers);
-    void loadTextures(gfx::RenderEngine* engine, std::span<cgltf_texture> gltfTextures);
+    Scene scene;
 
-    void setMaterialDescriptor(gfx::RenderEngine* engine, Material& material);
-    void loadMaterials(gfx::RenderEngine* engine, std::span<cgltf_material> gltfMaterials);
+private:
+    gfx::RenderEngine* engine;
+
+    void loadImages(std::span<cgltf_image> gltfImages);
+    void loadSamplers(std::span<cgltf_sampler> gltfSamplers);
+    void loadTextures(std::span<cgltf_texture> gltfTextures);
+
+    void setMaterialDescriptor(Material& material);
+    void loadMaterials(std::span<cgltf_material> gltfMaterials);
 
     struct BufferDesc
     {
@@ -134,10 +136,11 @@ private:
         size_t elementSize;
     };
 
-    BufferDesc loadIndexBuffer(gfx::RenderEngine* engine, cgltf_accessor& accessor);
-    BufferDesc loadVertexBuffer(gfx::RenderEngine* engine, const cgltf_primitive& primitive);
-    MeshPrimitive createMeshPrimitive(gfx::RenderEngine* engine, const cgltf_primitive& primitive);
-    void loadMeshes(gfx::RenderEngine* engine, std::span<cgltf_mesh> gltfMeshes);
+    BufferDesc loadIndexBuffer(cgltf_accessor& accessor);
+    BufferDesc loadVertexBuffer(const cgltf_primitive& primitive);
+    MeshPrimitive createMeshPrimitive(const cgltf_primitive& primitive);
+    void loadMeshes(std::span<cgltf_mesh> gltfMeshes);
 
-    void loadNodes(gfx::RenderEngine* engine, std::span<cgltf_node> gltfNodes);
+    MeshNode createMeshNode(const cgltf_mesh& mesh, const glm::mat4& transform);
+    void loadScene(const cgltf_scene& gltfScene);
 };
