@@ -4,6 +4,7 @@
 #include "Device.h"
 #include "Resource.h"
 #include "Pipeline.h"
+#include "GLTFLoader.h"
 
 // Tell SDL not to mess with main()
 #define SDL_MAIN_HANDLED
@@ -45,13 +46,6 @@ namespace gfx
 static const size_t NUM_FRAMES = 2;
 static const uint32_t NUM_MATERIALS_MAX = 10;
 
-struct StaticMesh
-{
-    std::vector<MeshSurface> surfaces;
-
-    void cleanup(Device* device);
-};
-
 struct GlobalSceneData
 {
     glm::mat4 viewproj;
@@ -80,6 +74,7 @@ class RenderEngine
 public:
 
     std::unique_ptr<Device> device;
+    std::unique_ptr<LoadedGltf> LoadedGltf;
 
     VkCommandPool immediateCommandPool;
     VkCommandBuffer immediateCommandBuffer;
@@ -112,8 +107,6 @@ public:
     };
     FrameData frames[NUM_FRAMES];
     size_t currentFrameNumber = 0;
-
-    std::optional<StaticMesh> staticMesh;
 
     enum class PipelineType : uint8_t
     {
@@ -163,10 +156,6 @@ private:
     FrameData& getCurrentFrameData();
     void incrementFrameData();
     VkShaderModule loadShaderModule(const char* shaderPath);
-    void initMaterialDescriptor(Material& material);
-    Texture loadWhiteTexture();
-    Texture loadTexture(cgltf_texture* texture);
-    std::optional<StaticMesh> loadStaticMesh(const char* meshPath);
 };
 
 } // namespace gfx

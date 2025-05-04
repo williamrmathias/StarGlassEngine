@@ -25,8 +25,6 @@ struct Texture
     ImageHandle image;
     SamplerHandle sampler;
     VkImageView view;
-
-    //void cleanup(gfx::Device* device);
 };
 
 struct MaterialConstants
