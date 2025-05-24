@@ -2,13 +2,29 @@
 
 // sge
 #include "Resource.h"
-#include "RenderEngine.h"
 
 // stl
 #include <optional>
 #include <vector>
 #include <string_view>
 #include <unordered_map>
+#include <array>
+#include <cstdint>
+#include <span>
+
+// cgltf
+#include <cgltf.h>
+
+// glm
+#include <glm/glm.hpp>
+
+// vulkan
+#include <vulkan/vulkan_core.h>
+
+namespace gfx
+{
+class RenderEngine;
+}
 
 using AssetId = uint64_t;
 static const AssetId invalidAssetId = UINT64_MAX;

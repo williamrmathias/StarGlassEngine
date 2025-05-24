@@ -1,8 +1,9 @@
 // sge
-#include "GLTFLoader.h"
 #include "Log.h"
 #include "Commands.h"
 #include "Utils.h"
+#include "GLTFLoader.h"
+#include "RenderEngine.h"
 
 // cgltf
 #define CGLTF_IMPLEMENTATION
@@ -13,12 +14,54 @@
 #include <stb_image.h>
 
 // glm
+#define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/quaternion.hpp>
 
 // stl
 #include <span>
 #include <utility>
+
+VkVertexInputBindingDescription Vertex::getInputBindingDescription()
+{
+    VkVertexInputBindingDescription bindingDesc{};
+    bindingDesc.binding = 0;
+    bindingDesc.stride = sizeof(Vertex);
+    bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    return bindingDesc;
+}
+
+std::array<VkVertexInputAttributeDescription, 4> Vertex::getInputAttributeDescription()
+{
+    std::array<VkVertexInputAttributeDescription, 4> attribDesc;
+
+    // position attrib
+    attribDesc[0].location = 0;
+    attribDesc[0].binding = 0;
+    attribDesc[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attribDesc[0].offset = offsetof(Vertex, position);
+
+    // normal attrib
+    attribDesc[1].location = 1;
+    attribDesc[1].binding = 0;
+    attribDesc[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attribDesc[1].offset = offsetof(Vertex, normal);
+
+    // uv attrib
+    attribDesc[2].location = 2;
+    attribDesc[2].binding = 0;
+    attribDesc[2].format = VK_FORMAT_R32G32_SFLOAT;
+    attribDesc[2].offset = offsetof(Vertex, uv);
+
+    // color attrib
+    attribDesc[3].location = 3;
+    attribDesc[3].binding = 0;
+    attribDesc[3].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attribDesc[3].offset = offsetof(Vertex, color);
+
+    return attribDesc;
+}
 
 static AssetId getImageId(const cgltf_image& image)
 {
@@ -245,7 +288,7 @@ static AssetId getTextureId(const cgltf_texture& texture)
 
 void LoadedGltf::loadTextures(std::span<cgltf_texture> gltfTextures)
 {
-    textures.reserve(textures.size());
+    textures.reserve(gltfTextures.size());
 
     for (const cgltf_texture& texture : gltfTextures)
     {
@@ -282,7 +325,7 @@ static AssetId getMaterialId(const cgltf_material& material)
         const cgltf_pbr_metallic_roughness& pbr = material.pbr_metallic_roughness;
 
         // hash PBR constants
-        const uint32_t constantData[6] = {
+        const cgltf_float constantData[6] = {
             pbr.base_color_factor[0], pbr.base_color_factor[1],
             pbr.base_color_factor[2], pbr.base_color_factor[3],
             pbr.metallic_factor, pbr.roughness_factor
@@ -393,7 +436,7 @@ void LoadedGltf::setMaterialDescriptor(Material& material)
 
 void LoadedGltf::loadMaterials(std::span<cgltf_material> gltfMaterials)
 {
-    materials.reserve(materials.size());
+    materials.reserve(gltfMaterials.size());
 
     for (const cgltf_material& material : gltfMaterials)
     {
@@ -402,7 +445,7 @@ void LoadedGltf::loadMaterials(std::span<cgltf_material> gltfMaterials)
         {
             // load PBR constants
             newMaterial.constants.baseColorFactor = glm::make_vec4(
-                &material.pbr_metallic_roughness.base_color_factor
+                reinterpret_cast<const float*>(material.pbr_metallic_roughness.base_color_factor)
             );
             newMaterial.constants.metalnessFactor = material.pbr_metallic_roughness.metallic_factor;
             newMaterial.constants.roughnessFactor = material.pbr_metallic_roughness.roughness_factor;
@@ -674,7 +717,8 @@ MeshPrimitive LoadedGltf::createMeshPrimitive(const cgltf_primitive& primitive)
         break;
     default:
         SDL_LogError(0, "Mesh load error: Mesh primitive contains invalid topology");
-        return;
+        std::abort();
+        return MeshPrimitive{};
     }
 
     // get index buffer
@@ -684,7 +728,7 @@ MeshPrimitive LoadedGltf::createMeshPrimitive(const cgltf_primitive& primitive)
         // TODO: Support non index geometrys
         BufferDesc indexDesc = loadIndexBuffer(*primitive.indices);
         newPrimitive.indexBuffer = indexDesc.handle;
-        newPrimitive.indexCount = indexDesc.numElements;
+        newPrimitive.indexCount = static_cast<uint32_t>(indexDesc.numElements);
         newPrimitive.indexType = indexDesc.elementSize == 4 ?
             VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
     }
@@ -693,7 +737,7 @@ MeshPrimitive LoadedGltf::createMeshPrimitive(const cgltf_primitive& primitive)
     {
         BufferDesc vertexDesc = loadVertexBuffer(primitive);
         newPrimitive.vertexBuffer = vertexDesc.handle;
-        newPrimitive.vertexCount = vertexDesc.numElements;
+        newPrimitive.vertexCount = static_cast<uint32_t>(vertexDesc.numElements);
     }
 
     // get material
@@ -774,6 +818,8 @@ MeshNode LoadedGltf::createMeshNode(const cgltf_mesh& mesh, const glm::mat4& tra
 
     AssetId meshId = getMeshId(primitives);
     newMeshNode.mesh = meshMap[meshId];
+
+    return newMeshNode;
 }
 
 void LoadedGltf::loadScene(const cgltf_scene& gltfScene)
