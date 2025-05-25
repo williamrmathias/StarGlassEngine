@@ -104,6 +104,8 @@ void GraphicsPipelineBuilder::setShaderStages(
     VkShaderModule fragmentShader, std::string_view fragmentEntryName
 )
 {
+    shaderStages.clear();
+
     VkPipelineShaderStageCreateInfo stageInfo{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
         .pNext = nullptr,

@@ -4,6 +4,7 @@
 #include "Device.h"
 #include "Resource.h"
 #include "Pipeline.h"
+#include "GLTFLoader.h"
 
 // Tell SDL not to mess with main()
 #define SDL_MAIN_HANDLED
@@ -43,68 +44,7 @@ namespace gfx
 {
 
 static const size_t NUM_FRAMES = 2;
-static const uint32_t NUM_MATERIALS_MAX = 10;
-
-struct Vertex
-{
-    glm::vec3 position;
-    glm::vec3 normal;
-    glm::vec2 uv;
-    glm::vec4 color;
-
-    static VkVertexInputBindingDescription getInputBindingDescription();
-    static std::array<VkVertexInputAttributeDescription, 4> getInputAttributeDescription();
-};
-
-struct Texture
-{
-    AllocatedImage image;
-
-    VkSampler sampler;
-    VkImageView view;
-
-    void cleanup(Device* device);
-};
-
-struct MaterialConstants
-{
-    glm::vec4 baseColorFactor;
-    float metalnessFactor;
-    float roughnessFactor;
-};
-
-struct Material
-{
-    MaterialConstants constants;
-
-    Texture baseColorTex;
-    Texture metalRoughTex;
-
-    VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
-
-    void cleanup(Device* device);
-};
-
-struct MeshSurface
-{
-    AllocatedBuffer vertexBuffer;
-    AllocatedBuffer indexBuffer;
-
-    uint32_t vertexCount;
-    uint32_t indexCount;
-
-    VkPrimitiveTopology topology;
-    VkIndexType indexType;
-
-    Material material;
-};
-
-struct StaticMesh
-{
-    std::vector<MeshSurface> surfaces;
-
-    void cleanup(Device* device);
-};
+static const uint32_t NUM_MATERIALS_MAX = 100;
 
 struct GlobalSceneData
 {
@@ -134,6 +74,7 @@ class RenderEngine
 public:
 
     std::unique_ptr<Device> device;
+    std::unique_ptr<LoadedGltf> loadedGltf;
 
     VkCommandPool immediateCommandPool;
     VkCommandBuffer immediateCommandBuffer;
@@ -167,8 +108,6 @@ public:
     FrameData frames[NUM_FRAMES];
     size_t currentFrameNumber = 0;
 
-    std::optional<StaticMesh> staticMesh;
-
     enum class PipelineType : uint8_t
     {
         MainGraphics,
@@ -196,31 +135,27 @@ public:
 
     GlobalSceneData& getGlobalSceneData() { return globalSceneData; }
 
+    VkCommandBuffer startImmediateCommands();
+    void endAndSubmitImmediateCommands();
+
 private:
     GlobalSceneData globalSceneData;
 
     void initColorTarget();
     void initDepthTarget();
     void initDescriptorPool();
-    void initGlobalSceneData();
     void initImmediateStructures();
     void initFrameData();
-    void initGeometryBuffers();
     void initGraphicsPipelines();
     void initImGui(SDL_Window* window);
+    void initScene();
 
-    VkCommandBuffer startImmediateCommands();
-    void endAndSubmitImmediateCommands();
-
+    void drawScene(VkCommandBuffer cmd);
     void renderImGui(VkCommandBuffer cmd, VkImageView colorAttachView, VkExtent2D renderExtent);
 
     FrameData& getCurrentFrameData();
     void incrementFrameData();
     VkShaderModule loadShaderModule(const char* shaderPath);
-    void initMaterialDescriptor(Material& material);
-    Texture loadWhiteTexture();
-    Texture loadTexture(cgltf_texture* texture);
-    std::optional<StaticMesh> loadStaticMesh(const char* meshPath);
 };
 
 } // namespace gfx

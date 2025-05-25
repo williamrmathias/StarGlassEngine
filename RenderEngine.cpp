@@ -20,14 +20,6 @@
 #include <filesystem>
 #include <chrono>
 
-// cgltf
-#define CGLTF_IMPLEMENTATION
-#include <cgltf.h>
-
-// stb
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
-
 namespace gfx
 {
 
@@ -41,17 +33,15 @@ void RenderEngine::init(SDL_Window* window)
 
     initDescriptorPool();
 
-    initGlobalSceneData();
-
     initImmediateStructures();
 
     initFrameData();
 
-    initGeometryBuffers();
-
     initGraphicsPipelines();
 
     initImGui(window);
+
+    initScene();
 }
 
 void RenderEngine::render()
@@ -170,52 +160,7 @@ void RenderEngine::render()
     // bind pipeline
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline.pipeline);
 
-    // draw static mesh
-    if (staticMesh.has_value())
-    {
-        for (MeshSurface& surface : staticMesh.value().surfaces)
-        {
-            VkDeviceSize vertexBufferOffset{ 0 };
-            vkCmdBindVertexBuffers(cmd, 0, 1, &surface.vertexBuffer.buffer, &vertexBufferOffset);
-
-            VkDeviceSize indexBufferOffset{ 0 };
-            vkCmdBindIndexBuffer(cmd, surface.indexBuffer.buffer, indexBufferOffset, surface.indexType);
-
-            // bind material
-            vkCmdBindDescriptorSets(
-                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline.layout, 1, 1, 
-                &surface.material.descriptorSet, 0, nullptr
-            );
-
-            // set push constants
-            static float angle = 0.f;
-            glm::mat4 model = glm::identity<glm::mat4>();
-            model = glm::translate(model, glm::vec3(0.f, 0.f, 3.f));
-            model = glm::rotate(
-                model,
-                glm::radians(angle),
-                glm::vec3(0.f, 1.f, 0.f)
-            );
-
-            PushConstants pushConstants{
-                .model = model,
-                .material = surface.material.constants
-            };
-
-            vkCmdPushConstants(
-                cmd,
-                activePipeline.layout,
-                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0,
-                sizeof(PushConstants),
-                &pushConstants
-            );
-
-            angle += 0.1f;
-
-            vkCmdDrawIndexed(cmd, surface.indexCount, 1, 0, 0, 0);
-        }
-    }
+    drawScene(cmd);
 
     // end rendering
     vkCmdEndRendering(cmd);
@@ -328,33 +273,11 @@ void RenderEngine::FrameData::cleanup(gfx::Device* device)
     gfx::destroyAllocatedBuffer(device, uniformBuffer);
 }
 
-void Texture::cleanup(gfx::Device* device)
-{
-    gfx::destroyAllocatedImage(device, image);
-    vkDestroyImageView(device->device, view, nullptr);
-    vkDestroySampler(device->device, sampler, nullptr);
-}
-
-void Material::cleanup(gfx::Device* device)
-{
-    baseColorTex.cleanup(device);
-    metalRoughTex.cleanup(device);
-}
-
-void StaticMesh::cleanup(gfx::Device* device)
-{
-    for (MeshSurface& surface : surfaces)
-    {
-        gfx::destroyAllocatedBuffer(device, surface.indexBuffer);
-        gfx::destroyAllocatedBuffer(device, surface.vertexBuffer);
-
-        surface.material.cleanup(device);
-    }
-}
-
 void RenderEngine::cleanup()
 {
     vkDeviceWaitIdle(device->device);
+
+    loadedGltf->cleanup();
 
     {
         // cleanup ImGui
@@ -377,6 +300,8 @@ void RenderEngine::cleanup()
         // pipelines
         graphicsPipeline.cleanup(device.get());
         baseColorPipeline.cleanup(device.get());
+        metalPipeline.cleanup(device.get());
+        roughPipeline.cleanup(device.get());
     }
 
     destroyAllocatedImage(device.get(), colorImage);
@@ -384,9 +309,6 @@ void RenderEngine::cleanup()
 
     destroyAllocatedImage(device.get(), depthImage);
     vkDestroyImageView(device->device, depthView, nullptr);
-
-    if (staticMesh.has_value())
-        staticMesh.value().cleanup(device.get());
 
     device.reset();
 }
@@ -599,25 +521,6 @@ void RenderEngine::initDescriptorPool()
     VK_Check(vkCreateDescriptorPool(device->device, &poolInfo, nullptr, &globalDescriptorPool));
 }
 
-void RenderEngine::initGlobalSceneData()
-{
-    // set constants
-    glm::mat4 view =
-        glm::lookAt(glm::vec3(0.f, 1.f, 0.f), glm::vec3(0.f, 0.f, 3.f), glm::vec3(0, 1.f, 0));
-
-    glm::mat4 projection = glm::perspective(glm::radians(45.f), 1280.f / 720.f, 0.1f, 100.f);
-    projection[1][1] *= -1; // correct gl -> vk
-
-    globalSceneData = GlobalSceneData{
-        .viewproj = projection * view,
-        .viewPosition = glm::vec3{0.f, 0.f, 0.f},
-        .lightDirection = glm::vec3{0.f, 1.f, 0.f},
-        .lightColor = glm::vec3{1.f, 1.f, 1.f}
-    };
-
-    setSunDirection(0.f, 0.f);
-}
-
 void RenderEngine::initImmediateStructures()
 {
     // create command pools
@@ -737,13 +640,6 @@ void RenderEngine::initFrameData()
     }
 }
 
-void RenderEngine::initGeometryBuffers()
-{
-    // load cube mesh
-    std::filesystem::path boxPath = std::filesystem::current_path() / std::filesystem::path("Assets/BoxTextured.glb");
-    staticMesh = loadStaticMesh(boxPath.string().c_str());
-}
-
 void RenderEngine::initGraphicsPipelines()
 {
     GraphicsPipelineBuilder pipelineBuilder;
@@ -848,6 +744,71 @@ void RenderEngine::initImGui(SDL_Window* window)
     ImGui_ImplVulkan_CreateFontsTexture();
 }
 
+void RenderEngine::initScene()
+{
+    // set global scene constants
+    glm::mat4 view =
+        glm::lookAt(glm::vec3(0.f, 1.f, 0.f), glm::vec3(0.f, 0.f, 3.f), glm::vec3(0, 1.f, 0));
+
+    glm::mat4 projection = glm::perspective(glm::radians(45.f), 1280.f / 720.f, 0.1f, 100.f);
+    projection[1][1] *= -1; // correct gl -> vk
+
+    globalSceneData = GlobalSceneData{
+        .viewproj = projection * view,
+        .viewPosition = glm::vec3{0.f, 0.f, 0.f},
+        .lightDirection = glm::vec3{0.f, 1.f, 0.f},
+        .lightColor = glm::vec3{1.f, 1.f, 1.f}
+    };
+
+    setSunDirection(0.f, 0.f);
+
+    // load gltf
+    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/structure.glb");
+    loadedGltf = std::make_unique<LoadedGltf>(this, gltfPath.string().c_str());
+}
+
+void RenderEngine::drawScene(VkCommandBuffer cmd)
+{
+    for (const MeshNode& meshNode : loadedGltf->scene.nodes)
+    {
+        const Mesh& mesh = loadedGltf->meshes[meshNode.mesh];
+
+        for (const MeshPrimitive& primitive : mesh.primitives)
+        {
+            // bind geometry buffers
+            gfx::AllocatedBuffer vertexBuffer = loadedGltf->buffers[primitive.vertexBuffer];
+            VkDeviceSize vertexBufferOffset{ 0 };
+            vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer.buffer, &vertexBufferOffset);
+
+            gfx::AllocatedBuffer indexBuffer = loadedGltf->buffers[primitive.indexBuffer];
+            VkDeviceSize indexBufferOffset{ 0 };
+            vkCmdBindIndexBuffer(cmd, indexBuffer.buffer, indexBufferOffset, primitive.indexType);
+
+            // bind material
+            const Material& material = loadedGltf->materials[primitive.material];
+            vkCmdBindDescriptorSets(
+                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline.layout, 
+                1, 1, &material.descriptorSet, 0, nullptr
+            );
+
+            // bind push constants
+            PushConstants pushConstants{
+                .model = meshNode.transform,
+                .material = material.constants
+            };
+
+            vkCmdPushConstants(
+                cmd, activePipeline.layout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                sizeof(pushConstants), &pushConstants
+            );
+
+            // draw primitive
+            vkCmdDrawIndexed(cmd, primitive.indexCount, 1, 0, 0, 0);
+        }
+    }
+}
+
 void RenderEngine::renderImGui(
     VkCommandBuffer cmd, VkImageView colorAttachView, VkExtent2D renderExtent
 )
@@ -934,581 +895,6 @@ VkShaderModule RenderEngine::loadShaderModule(const char* shaderPath)
     VK_Check(vkCreateShaderModule(device->device, &createInfo, nullptr, &resultShader));
 
     return resultShader;
-}
-
-struct ScopedGLTFData
-{
-    cgltf_data* data;
-
-    cgltf_data* operator->() const { return data; }
-
-    ~ScopedGLTFData()
-    {
-        cgltf_free(data);
-    }
-};
-
-void RenderEngine::initMaterialDescriptor(Material& material)
-{
-    // allocate descriptor set
-    VkDescriptorSetAllocateInfo allocInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-        .pNext = nullptr,
-        .descriptorPool = globalDescriptorPool,
-        .descriptorSetCount = 1,
-        .pSetLayouts = &materialLayout
-    };
-
-    VK_Check(vkAllocateDescriptorSets(device->device, &allocInfo, &material.descriptorSet));
-
-    // write to descriptor set
-    VkDescriptorImageInfo baseColorInfo{
-        .sampler = material.baseColorTex.sampler,
-        .imageView = material.baseColorTex.view,
-        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-    };
-
-    VkDescriptorImageInfo metalRoughInfo{
-        .sampler = material.metalRoughTex.sampler,
-        .imageView = material.metalRoughTex.view,
-        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-    };
-
-    std::array<VkWriteDescriptorSet, 2> writeSets;
-
-    writeSets[0] = VkWriteDescriptorSet{
-        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-        .pNext = nullptr,
-        .dstSet = material.descriptorSet,
-        .dstBinding = 0,
-        .dstArrayElement = 0,
-        .descriptorCount = 1,
-        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .pImageInfo = &baseColorInfo,
-        .pBufferInfo = nullptr,
-        .pTexelBufferView = nullptr
-    };
-
-    writeSets[1] = VkWriteDescriptorSet{
-        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-        .pNext = nullptr,
-        .dstSet = material.descriptorSet,
-        .dstBinding = 1,
-        .dstArrayElement = 0,
-        .descriptorCount = 1,
-        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .pImageInfo = &metalRoughInfo,
-        .pBufferInfo = nullptr,
-        .pTexelBufferView = nullptr
-    };
-
-    vkUpdateDescriptorSets(device->device, static_cast<uint32_t>(writeSets.size()), writeSets.data(), 0, nullptr);
-}
-
-// returns a blank white 1x1 texture
-Texture RenderEngine::loadWhiteTexture()
-{
-    Texture whiteTex;
-
-    uint32_t whiteData = glm::packUnorm4x8(glm::vec4(1.f, 1.f, 1.f, 1.f));
-    VkDeviceSize whiteDataSize = static_cast<VkDeviceSize>(1 * 1 * STBI_rgb_alpha);
-
-    gfx::AllocatedBuffer stagingBuffer = gfx::createAllocatedBuffer(
-        device.get(), whiteDataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
-        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-    );
-
-    gfx::writeToAllocatedBuffer(device.get(), &whiteData, whiteDataSize, stagingBuffer);
-
-    whiteTex.image = gfx::createAllocatedImage(
-        device.get(), VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-        VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ 1, 1 }
-    );
-
-    VkImageSubresourceLayers subresource{
-        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-        .mipLevel = 0,
-        .baseArrayLayer = 0,
-        .layerCount = 1
-    };
-
-    VkCommandBuffer cmd = startImmediateCommands();
-    copyBufferToImage(
-        cmd,
-        stagingBuffer, whiteTex.image,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_ASPECT_COLOR_BIT
-    );
-    transitionImageLayoutCoarse(
-        cmd, whiteTex.image.image,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_IMAGE_ASPECT_COLOR_BIT
-    );
-    endAndSubmitImmediateCommands();
-
-    gfx::destroyAllocatedBuffer(device.get(), stagingBuffer);
-
-    whiteTex.view = createImageView(
-        device.get(), whiteTex.image.image,
-        VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT
-    );
-
-    whiteTex.sampler = createSampler(
-        device.get(), VK_FILTER_NEAREST, VK_FILTER_NEAREST,
-        VK_SAMPLER_ADDRESS_MODE_REPEAT, VK_SAMPLER_ADDRESS_MODE_REPEAT
-    );
-
-    return whiteTex;
-}
-
-Texture RenderEngine::loadTexture(cgltf_texture* texture)
-{
-    Texture resultTex;
-
-    cgltf_image* image = texture->image;
-    cgltf_buffer_view* bufferView = image->buffer_view;
-    cgltf_buffer* buffer = bufferView->buffer;
-    const uint8_t* data = static_cast<uint8_t*>(buffer->data) + bufferView->offset;
-
-    int width, height, nChannels;
-    stbi_uc* imageData = stbi_load_from_memory(
-        data, static_cast<int>(bufferView->size),
-        &width, &height, &nChannels, STBI_rgb_alpha
-    );
-
-    VkDeviceSize imageDataSize = static_cast<VkDeviceSize>(width * height * STBI_rgb_alpha);
-
-    gfx::AllocatedBuffer stagingBuffer = gfx::createAllocatedBuffer(
-        device.get(), imageDataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-    );
-
-    gfx::writeToAllocatedBuffer(device.get(), imageData, imageDataSize, stagingBuffer);
-
-    resultTex.image = gfx::createAllocatedImage(
-        device.get(), VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-        VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ static_cast<uint32_t>(width), static_cast<uint32_t>(height) }
-    );
-
-    VkImageSubresourceLayers subresource{
-        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-        .mipLevel = 0,
-        .baseArrayLayer = 0,
-        .layerCount = 1
-    };
-
-    VkCommandBuffer cmd = startImmediateCommands();
-    copyBufferToImage(
-        cmd,
-        stagingBuffer, resultTex.image,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_ASPECT_COLOR_BIT
-    );
-    transitionImageLayoutCoarse(
-        cmd, resultTex.image.image,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_IMAGE_ASPECT_COLOR_BIT
-    );
-    endAndSubmitImmediateCommands();
-
-    gfx::destroyAllocatedBuffer(device.get(), stagingBuffer);
-
-    resultTex.view = createImageView(
-        device.get(), resultTex.image.image,
-        VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT
-    );
-
-    cgltf_sampler* sampler = texture->sampler;
-
-    VkFilter magFilter;
-    switch (sampler->mag_filter)
-    {
-    case cgltf_filter_type_nearest:
-        magFilter = VK_FILTER_NEAREST;
-        break;
-    case cgltf_filter_type_linear:
-    default:
-        magFilter = VK_FILTER_LINEAR;
-        break;
-    }
-
-    VkFilter minFilter;
-    switch (sampler->min_filter)
-    {
-    case cgltf_filter_type_nearest:
-    case cgltf_filter_type_nearest_mipmap_nearest:
-    case cgltf_filter_type_nearest_mipmap_linear:
-        minFilter = VK_FILTER_NEAREST;
-        break;
-    case cgltf_filter_type_linear:
-    case cgltf_filter_type_linear_mipmap_nearest:
-    case cgltf_filter_type_linear_mipmap_linear:
-    default:
-        minFilter = VK_FILTER_LINEAR;
-        break;
-    }
-
-    VkSamplerAddressMode uWrap{};
-    switch (sampler->wrap_s)
-    {
-    case cgltf_wrap_mode_clamp_to_edge:
-        uWrap = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        break;
-    case cgltf_wrap_mode_mirrored_repeat:
-        uWrap = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
-        break;
-    case cgltf_wrap_mode_repeat:
-        uWrap = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        break;
-    }
-
-    VkSamplerAddressMode vWrap{};
-    switch (sampler->wrap_t)
-    {
-    case cgltf_wrap_mode_clamp_to_edge:
-        vWrap = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        break;
-    case cgltf_wrap_mode_mirrored_repeat:
-        vWrap = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
-        break;
-    case cgltf_wrap_mode_repeat:
-        vWrap = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        break;
-    }
-
-    resultTex.sampler = createSampler(
-        device.get(), magFilter, minFilter, uWrap, vWrap
-    );
-
-    return resultTex;
-}
-
-std::optional<StaticMesh> RenderEngine::loadStaticMesh(const char* meshPath)
-{
-    cgltf_options options{}; // default loading options
-    ScopedGLTFData gltfData;
-
-    cgltf_result result = cgltf_parse_file(&options, meshPath, &gltfData.data);
-    if (result != cgltf_result_success || gltfData.data == nullptr)
-    {
-        SDL_LogError(0, "Mesh load error: Could not read file data: %s\n", meshPath);
-        SDL_LogError(0, "GLTF load error code: %i\n", result);
-        return std::nullopt;
-    }
-
-    result = cgltf_load_buffers(&options, gltfData.data, meshPath);
-    if (result != cgltf_result_success)
-    {
-        SDL_LogError(0, "Mesh load error: Could not read buffer data: %s\n", meshPath);
-        SDL_LogError(0, "GLTF load error code: %i\n", result);
-        return std::nullopt;
-    }
-
-    if (gltfData->meshes_count < 1)
-    {
-        SDL_LogError(0, "Mesh load error: Read file contains no meshes: %s\n", meshPath);
-        return std::nullopt;
-    }
-
-    // load in single mesh
-    cgltf_mesh* gltfMesh = &gltfData->meshes[0];
-
-    StaticMesh newMesh;
-    newMesh.surfaces.reserve(gltfMesh->primitives_count);
-
-    // sratch buffer data
-    std::vector<uint8_t> indexData;
-
-    std::vector<float> positionData;
-    std::vector<float> normalData;
-    std::vector<float> uvData;
-    std::vector<float> colorData;
-
-    std::vector<Vertex> vertexData;
-
-    for (cgltf_size i = 0; i < gltfMesh->primitives_count; i++)
-    {
-        MeshSurface newSurface;
-        cgltf_primitive* surface = &gltfMesh->primitives[i];
-
-        // get primative topology
-        {
-            // TODO: Implement rendering all topology types
-            switch (surface->type)
-            {
-            case cgltf_primitive_type_triangles:
-                newSurface.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-                break;
-            default:
-                SDL_LogError(
-                    0, "Mesh load error: Mesh primitive contains invalid topology: %s\n", meshPath);
-                SDL_LogError(0, "GLTF topology code: %i\n", surface->type);
-                return std::nullopt;
-            }
-        }
-
-        // load material
-        {
-            newSurface.material.constants = MaterialConstants{
-                .baseColorFactor = glm::vec4{1.f, 1.f, 1.f, 1.f},
-                .metalnessFactor = 0.f,
-                .roughnessFactor = 1.f
-            };
-            if (surface->material && surface->material->has_pbr_metallic_roughness)
-            {
-                cgltf_pbr_metallic_roughness& pbrMetalRough 
-                    = surface->material->pbr_metallic_roughness;
-
-                newSurface.material.constants.baseColorFactor 
-                    = glm::make_vec4(pbrMetalRough.base_color_factor);
-                newSurface.material.constants.metalnessFactor = pbrMetalRough.metallic_factor;
-                newSurface.material.constants.roughnessFactor = pbrMetalRough.roughness_factor;
-
-                // load base color texture
-                if (pbrMetalRough.base_color_texture.texture)
-                {
-                    newSurface.material.baseColorTex = loadTexture(
-                        pbrMetalRough.base_color_texture.texture
-                    );
-                }
-                else
-                {
-                    newSurface.material.baseColorTex = loadWhiteTexture();
-                }
-
-                // load metallic roughness texture
-                if (pbrMetalRough.metallic_roughness_texture.texture)
-                {
-                    newSurface.material.metalRoughTex = loadTexture(
-                        pbrMetalRough.metallic_roughness_texture.texture
-                    );
-                }
-                else
-                {
-                    newSurface.material.metalRoughTex = loadWhiteTexture();
-                }
-            }
-
-            initMaterialDescriptor(newSurface.material);
-        }
-
-        // load index buffer
-        // TODO: Support non index geometry
-        {
-            if (surface->indices == nullptr)
-            {
-                SDL_LogError(0, "Mesh load error: Surface missing indices: %s\n", meshPath);
-                return std::nullopt;
-            }
-
-            cgltf_size outComponentSize = cgltf_component_size(surface->indices->component_type);
-            cgltf_size indexCount = cgltf_accessor_unpack_indices(surface->indices, nullptr, 0, 0);
-            indexData.resize(outComponentSize * indexCount);
-
-            // base vulkan only supports 16u and 32u indices
-            switch (surface->indices->component_type)
-            {
-            case cgltf_component_type_r_16u:
-                newSurface.indexType = VK_INDEX_TYPE_UINT16;
-                break;
-            case cgltf_component_type_r_32u:
-                newSurface.indexType = VK_INDEX_TYPE_UINT32;
-                break;
-            default:
-                SDL_LogError(
-                    0, "Mesh load error: Mesh primitive contains invalid index format: %s\n", meshPath);
-                SDL_LogError(0, "GLTF index code: %i\n", surface->indices->component_type);
-                return std::nullopt;
-            }
-
-            cgltf_accessor_unpack_indices(surface->indices, indexData.data(), outComponentSize, indexCount);
-
-            newSurface.indexCount = static_cast<uint32_t>(indexCount);
-
-            VkDeviceSize dataSize = static_cast<VkDeviceSize>(outComponentSize * indexCount);
-
-            // create and upload gpu buffer
-            gfx::AllocatedBuffer stagingBuffer = gfx::createAllocatedBuffer(
-                device.get(), dataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-            );
-
-            gfx::writeToAllocatedBuffer(device.get(), indexData.data(), dataSize, stagingBuffer);
-
-            newSurface.indexBuffer = gfx::createAllocatedBuffer(
-                device.get(), dataSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0
-            );
-
-            // copy staging to gpu only buffer
-            VkCommandBuffer cmd = startImmediateCommands();
-            copyBufferToBuffer(cmd, stagingBuffer, newSurface.indexBuffer, dataSize);
-            endAndSubmitImmediateCommands();
-
-            gfx::destroyAllocatedBuffer(device.get(), stagingBuffer);
-        }
-
-        // load vertex buffer
-        {
-            // position
-            {
-                const cgltf_accessor* positionAcc =
-                    cgltf_find_accessor(surface, cgltf_attribute_type_position, 0);
-
-                if (positionAcc == nullptr)
-                {
-                    SDL_LogError(0, "Mesh load error: Surface position attrib invalid: %s\n", meshPath);
-                    return std::nullopt;
-                }
-
-                cgltf_size positionCount = cgltf_accessor_unpack_floats(positionAcc, nullptr, 0);
-
-                positionData.resize(positionCount);
-                cgltf_accessor_unpack_floats(positionAcc, positionData.data(), positionCount);
-            }
-
-            // normal
-            bool hasNormal = false;
-            {
-                const cgltf_accessor* normalAcc =
-                    cgltf_find_accessor(surface, cgltf_attribute_type_normal, 0);
-
-                if (normalAcc != nullptr)
-                {
-                    hasNormal = true;
-                    cgltf_size normalCount = cgltf_accessor_unpack_floats(normalAcc, nullptr, 0);
-
-                    normalData.resize(normalCount);
-                    cgltf_accessor_unpack_floats(normalAcc, normalData.data(), normalCount);
-                }
-            }
-
-            // uv
-            bool hasUv = false;
-            {
-                const cgltf_accessor* uvAcc =
-                    cgltf_find_accessor(surface, cgltf_attribute_type_texcoord, 0);
-
-                if (uvAcc != nullptr)
-                {
-                    hasUv = true;
-                    cgltf_size uvCount = cgltf_accessor_unpack_floats(uvAcc, nullptr, 0);
-
-                    uvData.resize(uvCount);
-                    cgltf_accessor_unpack_floats(uvAcc, uvData.data(), uvCount);
-                }
-            }
-
-            // color
-            cgltf_size colorChannels = 0;
-            {
-                const cgltf_accessor* colorAcc =
-                    cgltf_find_accessor(surface, cgltf_attribute_type_color, 0);
-
-                if (colorAcc != nullptr)
-                {
-                    colorChannels = cgltf_num_components(colorAcc->type);
-                    cgltf_size colorCount = cgltf_accessor_unpack_floats(colorAcc, nullptr, 0);
-
-                    colorData.resize(colorCount);
-                    cgltf_accessor_unpack_floats(colorAcc, colorData.data(), colorCount);
-                }
-            }
-
-            // assemble attribs
-            size_t vertexCount = positionData.size() / 3;
-            {
-                vertexData.resize(vertexCount);
-                for (size_t i = 0; i < vertexCount; i++)
-                {
-                    vertexData[i].position = glm::make_vec3(&positionData[3 * i]);
-
-                    if (hasNormal)
-                        vertexData[i].normal = glm::make_vec3(&normalData[3 * i]);
-                    else
-                        vertexData[i].normal = glm::vec3{ 0.f, 0.f, 1.f };
-
-                    if (hasUv)
-                        vertexData[i].uv = glm::make_vec2(&uvData[2 * i]);
-                    else
-                        vertexData[i].uv = glm::vec2{ 0.f, 0.f };
-
-                    if (colorChannels == 4)
-                        vertexData[i].color = glm::make_vec4(&colorData[4 * i]);
-                    else if (colorChannels == 3)
-                        vertexData[i].color = glm::vec4{ glm::make_vec3(&colorData[3 * i]), 1.f };
-                    else
-                        vertexData[i].color = glm::vec4{ 1.f, 1.f, 1.f, 1.f };
-                }
-            }
-
-            newSurface.vertexCount = static_cast<uint32_t>(vertexCount);
-
-            VkDeviceSize dataSize = static_cast<VkDeviceSize>(sizeof(vertexData[0]) * vertexCount);
-
-            // create and upload gpu buffer
-            gfx::AllocatedBuffer stagingBuffer = gfx::createAllocatedBuffer(
-                device.get(), dataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-            );
-
-            gfx::writeToAllocatedBuffer(device.get(), vertexData.data(), dataSize, stagingBuffer);
-
-            newSurface.vertexBuffer = gfx::createAllocatedBuffer(
-                device.get(), dataSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0
-            );
-
-            // copy staging to gpu only buffer
-            VkCommandBuffer cmd = startImmediateCommands();
-            copyBufferToBuffer(cmd, stagingBuffer, newSurface.vertexBuffer, dataSize);
-            endAndSubmitImmediateCommands();
-
-            gfx::destroyAllocatedBuffer(device.get(), stagingBuffer);
-        }
-
-        // add new surface
-        newMesh.surfaces.push_back(newSurface);
-    }
-
-    return newMesh;
-}
-
-VkVertexInputBindingDescription Vertex::getInputBindingDescription()
-{
-    VkVertexInputBindingDescription bindingDesc{};
-    bindingDesc.binding = 0;
-    bindingDesc.stride = sizeof(Vertex);
-    bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-    return bindingDesc;
-}
-
-std::array<VkVertexInputAttributeDescription, 4> Vertex::getInputAttributeDescription()
-{
-    std::array<VkVertexInputAttributeDescription, 4> attribDesc;
-
-    // position attrib
-    attribDesc[0].location = 0;
-    attribDesc[0].binding = 0;
-    attribDesc[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attribDesc[0].offset = offsetof(Vertex, position);
-
-    // normal attrib
-    attribDesc[1].location = 1;
-    attribDesc[1].binding = 0;
-    attribDesc[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attribDesc[1].offset = offsetof(Vertex, normal);
-
-    // uv attrib
-    attribDesc[2].location = 2;
-    attribDesc[2].binding = 0;
-    attribDesc[2].format = VK_FORMAT_R32G32_SFLOAT;
-    attribDesc[2].offset = offsetof(Vertex, uv);
-
-    // color attrib
-    attribDesc[3].location = 3;
-    attribDesc[3].binding = 0;
-    attribDesc[3].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    attribDesc[3].offset = offsetof(Vertex, color);
-
-    return attribDesc;
 }
 
 } // namespace gfx
