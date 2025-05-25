@@ -63,6 +63,162 @@ std::array<VkVertexInputAttributeDescription, 4> Vertex::getInputAttributeDescri
     return attribDesc;
 }
 
+void LoadedGltf::initDefaultAssets()
+{
+    {
+        // default white image
+        uint32_t whiteData = glm::packUnorm4x8(glm::vec4(1.f, 1.f, 1.f, 1.f));
+        VkDeviceSize imageDataSize = static_cast<VkDeviceSize>(1 * 1 * STBI_rgb_alpha);
+
+        gfx::Device* device = engine->device.get();
+
+        gfx::AllocatedBuffer stagingBuffer = gfx::createAllocatedBuffer(
+            device, imageDataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+        );
+
+        gfx::writeToAllocatedBuffer(device, &whiteData, imageDataSize, stagingBuffer);
+
+        gfx::AllocatedImage newImage = gfx::createAllocatedImage(
+            device, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ 1, 1 }
+        );
+
+        VkImageSubresourceLayers subresource{
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .mipLevel = 0,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        };
+
+        VkCommandBuffer cmd = engine->startImmediateCommands();
+        gfx::copyBufferToImage(
+            cmd,
+            stagingBuffer, newImage,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_ASPECT_COLOR_BIT
+        );
+        gfx::transitionImageLayoutCoarse(
+            cmd, newImage.image,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT
+        );
+        engine->endAndSubmitImmediateCommands();
+
+        gfx::destroyAllocatedBuffer(device, stagingBuffer);
+        images.push_back(newImage);
+
+        assert(images.size() == 1);
+
+        AssetId id = util::fastHash(&whiteData, static_cast<int>(imageDataSize));
+        imageMap[id] = defaultHandle;
+    }
+
+    {
+        // checker board error image
+        uint32_t magenta = glm::packUnorm4x8(glm::vec4(1.f, 0.f, 1.f, 1.f));
+        uint32_t black = glm::packUnorm4x8(glm::vec4(0.f, 0.f, 0.f, 1.f));
+        uint32_t checkerData[4] = {
+            magenta, black,
+            black,   magenta
+        };
+
+        VkDeviceSize imageDataSize = static_cast<VkDeviceSize>(1 * 1 * STBI_rgb_alpha);
+
+        gfx::Device* device = engine->device.get();
+
+        gfx::AllocatedBuffer stagingBuffer = gfx::createAllocatedBuffer(
+            device, imageDataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+        );
+
+        gfx::writeToAllocatedBuffer(device, checkerData, imageDataSize, stagingBuffer);
+
+        gfx::AllocatedImage newImage = gfx::createAllocatedImage(
+            device, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ 1, 1 }
+        );
+
+        VkImageSubresourceLayers subresource{
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .mipLevel = 0,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        };
+
+        VkCommandBuffer cmd = engine->startImmediateCommands();
+        gfx::copyBufferToImage(
+            cmd,
+            stagingBuffer, newImage,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_ASPECT_COLOR_BIT
+        );
+        gfx::transitionImageLayoutCoarse(
+            cmd, newImage.image,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT
+        );
+        engine->endAndSubmitImmediateCommands();
+
+        gfx::destroyAllocatedBuffer(device, stagingBuffer);
+        images.push_back(newImage);
+
+        assert(images.size() == 2);
+
+        // map invalidAssetId here
+        imageMap[invalidAssetId] = errorHandle;
+
+        // also map content hash here
+        AssetId id = util::fastHash(checkerData, static_cast<int>(imageDataSize));
+        imageMap[id] = errorHandle;
+    }
+
+    {
+        // default sampler (linear filter - repeat wrap)
+        VkFilter magFilter = VK_FILTER_LINEAR;
+        VkFilter minFilter = VK_FILTER_LINEAR;
+        VkSamplerAddressMode uWrap = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        VkSamplerAddressMode vWrap = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+
+        VkSampler newSampler = gfx::createSampler(
+            engine->device.get(), magFilter, minFilter, uWrap, vWrap
+        );
+
+        samplers.push_back(newSampler);
+        samplerMap[invalidAssetId] = defaultHandle;
+
+        // also map content hash here
+        const uint32_t data[4] = {
+            static_cast<uint32_t>(magFilter), static_cast<uint32_t>(minFilter),
+            static_cast<uint32_t>(uWrap) , static_cast<uint32_t>(vWrap)
+        };
+
+        AssetId id = util::fastHash(data, 4 * sizeof(data[0]));
+        samplerMap[id] = defaultHandle;
+    }
+
+    {
+        // default texture (white texture - default sampler)
+        Texture newTexture = { .image = defaultHandle, .sampler = defaultHandle };
+
+        // create image view
+        newTexture.view = gfx::createImageView(
+            engine->device.get(), images[newTexture.image].image,
+            VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT
+        );
+
+        textures.push_back(newTexture);
+        textureMap[invalidAssetId] = defaultHandle;
+    }
+
+    {
+        // default material
+        Material newMaterial = Material::initMaterial();
+        setMaterialDescriptor(newMaterial);
+
+        materials.push_back(newMaterial);
+        materialMap[invalidAssetId] = defaultHandle;
+    }
+}
+
 static AssetId getImageId(const cgltf_image& image)
 {
     if (image.uri)
@@ -97,7 +253,7 @@ struct ScopedSTBImage
 // they're all uploaded to the GPU at the return of this function
 void LoadedGltf::loadImages(std::span<cgltf_image> gltfImages)
 {
-    images.reserve(gltfImages.size());
+    images.reserve(images.size() + gltfImages.size());
 
     for (const cgltf_image& image : gltfImages)
     {
@@ -122,9 +278,9 @@ void LoadedGltf::loadImages(std::span<cgltf_image> gltfImages)
         }
         else
         {
-            // TODO: Add proper image fallback
-            SDL_LogError(0, "GLTF load error: input image has now buffer view: %s", image.name);
-            std::abort();
+            // use error fallback image
+            SDL_LogError(0, "GLTF load error: input image has no resource view: %s", image.name);
+            continue;
         }
 
         imageDataSize = static_cast<VkDeviceSize>(width * height * STBI_rgb_alpha);
@@ -248,7 +404,7 @@ static AssetId getSamplerId(const cgltf_sampler& sampler)
 
 void LoadedGltf::loadSamplers(std::span<cgltf_sampler> gltfSamplers)
 {
-    samplers.reserve(gltfSamplers.size());
+    samplers.reserve(samplers.size() + gltfSamplers.size());
 
     for (const cgltf_sampler& sampler : gltfSamplers)
     {
@@ -271,8 +427,8 @@ void LoadedGltf::loadSamplers(std::span<cgltf_sampler> gltfSamplers)
 
 static AssetId getTextureId(const cgltf_texture& texture)
 {
-    AssetId imageId = 0;
-    AssetId samplerId = 0;
+    AssetId imageId = invalidAssetId;
+    AssetId samplerId = invalidAssetId;
     if (texture.image)
     {
         imageId = getImageId(*texture.image);
@@ -288,11 +444,11 @@ static AssetId getTextureId(const cgltf_texture& texture)
 
 void LoadedGltf::loadTextures(std::span<cgltf_texture> gltfTextures)
 {
-    textures.reserve(gltfTextures.size());
+    textures.reserve(textures.size() + gltfTextures.size());
 
     for (const cgltf_texture& texture : gltfTextures)
     {
-        Texture newTexture;
+        Texture newTexture = {.image = invalidAssetId, .sampler = invalidAssetId};
         if (texture.image)
         {
             newTexture.image = imageMap[getImageId(*texture.image)];
@@ -301,8 +457,6 @@ void LoadedGltf::loadTextures(std::span<cgltf_texture> gltfTextures)
         {
             newTexture.sampler = samplerMap[getSamplerId(*texture.sampler)];
         }
-
-        // TODO: Fallbacks
 
         // create image view
         newTexture.view = gfx::createImageView(
@@ -342,20 +496,12 @@ static AssetId getMaterialId(const cgltf_material& material)
             cgltf_texture& baseColorTex = *material.pbr_metallic_roughness.base_color_texture.texture;
             baseColorId = getTextureId(baseColorTex);
         }
-        else
-        {
-            // TODO: Base Color Fallback
-        }
 
         if (material.pbr_metallic_roughness.metallic_roughness_texture.texture)
         {
             cgltf_texture& metalRoughTex =
                 *material.pbr_metallic_roughness.metallic_roughness_texture.texture;
             metalRoughId = getTextureId(metalRoughTex);
-        }
-        else
-        {
-            // TODO: Metallic-Roughness Fallback
         }
 
         AssetId materialId = constantHash;
@@ -364,7 +510,6 @@ static AssetId getMaterialId(const cgltf_material& material)
         return materialId;
     }
 
-    // TODO: PBR Material fallback?
     // TODO: Other material properties (alpha, double sided etc)
     // TODO: Other material types
     return invalidAssetId;
@@ -434,13 +579,27 @@ void LoadedGltf::setMaterialDescriptor(Material& material)
     );
 }
 
+Material Material::initMaterial()
+{
+    // initializes material properties with proper fallbacks
+    Material newMaterial = {};
+    newMaterial.constants.baseColorFactor = glm::vec4{ 1.f, 1.f, 1.f, 1.f };
+    newMaterial.constants.metalnessFactor = 1.f;
+    newMaterial.constants.roughnessFactor = 1.f;
+
+    newMaterial.baseColorTex = defaultHandle;
+    newMaterial.metalRoughTex = defaultHandle;
+
+    return newMaterial;
+}
+
 void LoadedGltf::loadMaterials(std::span<cgltf_material> gltfMaterials)
 {
     materials.reserve(gltfMaterials.size());
 
     for (const cgltf_material& material : gltfMaterials)
     {
-        Material newMaterial;
+        Material newMaterial = Material::initMaterial();
         if (material.has_pbr_metallic_roughness)
         {
             // load PBR constants
@@ -456,10 +615,6 @@ void LoadedGltf::loadMaterials(std::span<cgltf_material> gltfMaterials)
                 cgltf_texture& baseColorTex = *material.pbr_metallic_roughness.base_color_texture.texture;
                 newMaterial.baseColorTex = textureMap[getTextureId(baseColorTex)];
             }
-            else
-            {
-                // TODO: Base Color Fallback
-            }
 
             if (material.pbr_metallic_roughness.metallic_roughness_texture.texture)
             {
@@ -467,13 +622,8 @@ void LoadedGltf::loadMaterials(std::span<cgltf_material> gltfMaterials)
                     *material.pbr_metallic_roughness.metallic_roughness_texture.texture;
                 newMaterial.metalRoughTex = textureMap[getTextureId(metalRoughTex)];
             }
-            else
-            {
-                // TODO: Metallic-Roughness Fallback
-            }
         }
 
-        // TODO: PBR Material fallback?
         // TODO: Other material properties (alpha, double sided etc)
         // TODO: Other material types
 
@@ -722,7 +872,7 @@ MeshPrimitive LoadedGltf::createMeshPrimitive(const cgltf_primitive& primitive)
     }
 
     // get index buffer
-    newPrimitive.indexBuffer = invalidAssetId;
+    newPrimitive.indexBuffer = defaultHandle;
     if (primitive.indices)
     {
         // TODO: Support non index geometrys
@@ -731,6 +881,11 @@ MeshPrimitive LoadedGltf::createMeshPrimitive(const cgltf_primitive& primitive)
         newPrimitive.indexCount = static_cast<uint32_t>(indexDesc.numElements);
         newPrimitive.indexType = indexDesc.elementSize == 4 ?
             VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
+    }
+    else
+    {
+        SDL_LogError(0, "Mesh load error: Mesh primitive is non indexed");
+        std::abort();
     }
 
     // get vertex buffer
@@ -741,12 +896,11 @@ MeshPrimitive LoadedGltf::createMeshPrimitive(const cgltf_primitive& primitive)
     }
 
     // get material
-    newPrimitive.material = invalidAssetId;
+    newPrimitive.material = defaultHandle;
     if (primitive.material)
     {
         newPrimitive.material = materialMap[getMaterialId(*primitive.material)];
     }
-    // TODO: Default material
 
     return newPrimitive;
 }
@@ -794,7 +948,7 @@ static glm::mat4 getNodeMatrix(const cgltf_node& node, const glm::mat4& parentTr
 
     glm::mat4 transform = glm::identity<glm::mat4>();
     if (node.has_scale)
-        glm::scale(transform, glm::make_vec3(node.scale));
+        transform = glm::scale(transform, glm::make_vec3(node.scale));
 
     if (node.has_rotation)
     {
@@ -803,7 +957,7 @@ static glm::mat4 getNodeMatrix(const cgltf_node& node, const glm::mat4& parentTr
     }
 
     if (node.has_translation)
-        glm::translate(transform, glm::make_vec3(node.translation));
+        transform = glm::translate(transform, glm::make_vec3(node.translation));
 
     return parentTransform * transform;
 }
@@ -888,6 +1042,8 @@ LoadedGltf::LoadedGltf(gfx::RenderEngine* renderEngine, std::string_view gltfPat
         SDL_LogError(0, "GLTF load error code: %i\n", result);
         std::abort();
     }
+
+    initDefaultAssets();
 
     loadImages({ gltfData->images, gltfData->images_count });
     loadSamplers({ gltfData->samplers, gltfData->samplers_count });

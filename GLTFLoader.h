@@ -36,6 +36,9 @@ using TextureHandle = uint64_t;
 using MaterialHandle = uint64_t;
 using MeshHandle = uint64_t;
 
+static const uint64_t defaultHandle = 0;
+static const uint64_t errorHandle = 1;
+
 struct Texture
 {
     ImageHandle image;
@@ -59,7 +62,7 @@ struct Material
 
     VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
 
-    //void cleanup(gfx::Device* device);
+    static Material initMaterial();
 };
 
 struct Vertex
@@ -135,6 +138,8 @@ public:
 
 private:
     gfx::RenderEngine* engine;
+
+    void initDefaultAssets();
 
     void loadImages(std::span<cgltf_image> gltfImages);
     void loadSamplers(std::span<cgltf_sampler> gltfSamplers);
