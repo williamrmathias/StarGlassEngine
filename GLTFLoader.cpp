@@ -979,7 +979,7 @@ MeshNode LoadedGltf::createMeshNode(const cgltf_mesh& mesh, const glm::mat4& tra
 
 void LoadedGltf::loadScene(const cgltf_scene& gltfScene)
 {
-    Scene newScene;
+    Scene& newScene = scene;
     std::vector<cgltf_node*> nodeStack;
     std::vector<glm::mat4> transformStack;
     for (cgltf_size i = 0; i < gltfScene.nodes_count; i++)
