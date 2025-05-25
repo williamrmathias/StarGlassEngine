@@ -4,6 +4,7 @@
 #include "Utils.h"
 #include "GLTFLoader.h"
 #include "RenderEngine.h"
+#include "Resource.h"
 
 // cgltf
 #define CGLTF_IMPLEMENTATION
@@ -1053,4 +1054,62 @@ LoadedGltf::LoadedGltf(gfx::RenderEngine* renderEngine, std::string_view gltfPat
 
     if (gltfData->scene)
         loadScene(*gltfData->scene);
+}
+
+void Texture::cleanup(gfx::Device* device)
+{
+    vkDestroyImageView(device->device, view, nullptr);
+}
+
+void LoadedGltf::cleanup()
+{
+    {
+        // buffers
+        for (auto& buffer : buffers)
+            gfx::destroyAllocatedBuffer(engine->device.get(), buffer);
+
+        buffers.clear();
+        bufferMap.clear();
+    }
+
+    {
+        // images
+        for (auto& image : images)
+            gfx::destroyAllocatedImage(engine->device.get(), image);
+
+        images.clear();
+        imageMap.clear();
+    }
+
+    {
+        // samplers
+        for (auto& sampler : samplers)
+            vkDestroySampler(engine->device->device, sampler, nullptr);
+
+        samplers.clear();
+        samplerMap.clear();
+    }
+
+    {
+        // textures
+        for (auto& texture : textures)
+            texture.cleanup(engine->device.get());
+
+        textures.clear();
+        textureMap.clear();
+    }
+
+    {
+        // materials
+        materials.clear();
+        materialMap.clear();
+    }
+
+    {
+        // meshes
+        meshes.clear();
+        meshMap.clear();
+    }
+
+    scene.nodes.clear();
 }

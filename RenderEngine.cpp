@@ -277,6 +277,8 @@ void RenderEngine::cleanup()
 {
     vkDeviceWaitIdle(device->device);
 
+    loadedGltf->cleanup();
+
     {
         // cleanup ImGui
         ImGui_ImplVulkan_Shutdown();
@@ -298,6 +300,8 @@ void RenderEngine::cleanup()
         // pipelines
         graphicsPipeline.cleanup(device.get());
         baseColorPipeline.cleanup(device.get());
+        metalPipeline.cleanup(device.get());
+        roughPipeline.cleanup(device.get());
     }
 
     destroyAllocatedImage(device.get(), colorImage);

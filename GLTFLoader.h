@@ -44,6 +44,8 @@ struct Texture
     ImageHandle image;
     SamplerHandle sampler;
     VkImageView view;
+
+    void cleanup(gfx::Device* device);
 };
 
 struct MaterialConstants
@@ -115,6 +117,8 @@ class LoadedGltf
 {
 public:
     LoadedGltf(gfx::RenderEngine* renderEngine, std::string_view gltfPath);
+
+    void cleanup();
 
     std::vector<gfx::AllocatedBuffer> buffers;
     std::unordered_map<AssetId, BufferHandle> bufferMap;
