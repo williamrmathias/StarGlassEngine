@@ -115,17 +115,35 @@ void GraphicsPipelineBuilder::setShaderStages(
 
     {
         // vertex
+        vertexShaderName = std::string(vertexEntryName);
+
+        VkPipelineShaderStageCreateInfo stageInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .pSpecializationInfo = nullptr
+        };
+
         stageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
         stageInfo.module = vertexShader;
-        stageInfo.pName = vertexEntryName.data();
+        stageInfo.pName = vertexShaderName.c_str();
         shaderStages.push_back(stageInfo);
     }
 
     {
         // fragment
+        fragmentShaderName = std::string(fragmentEntryName);
+
+        VkPipelineShaderStageCreateInfo stageInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .pSpecializationInfo = nullptr
+        };
+
         stageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
         stageInfo.module = fragmentShader;
-        stageInfo.pName = fragmentEntryName.data();
+        stageInfo.pName = fragmentShaderName.c_str();
         shaderStages.push_back(stageInfo);
     }
 }
@@ -139,11 +157,11 @@ void GraphicsPipelineBuilder::setVertexInputState(
     vertexBindingDesc.assign(bindingDesc.begin(), bindingDesc.end());
     vertexAttribDesc.assign(attribDesc.begin(), attribDesc.end());
 
-    vertexInputInfo.vertexBindingDescriptionCount = bindingDesc.size();
-    vertexInputInfo.pVertexBindingDescriptions = bindingDesc.data();
+    vertexInputInfo.vertexBindingDescriptionCount = vertexBindingDesc.size();
+    vertexInputInfo.pVertexBindingDescriptions = vertexBindingDesc.data();
 
-    vertexInputInfo.vertexAttributeDescriptionCount = attribDesc.size();
-    vertexInputInfo.pVertexAttributeDescriptions = attribDesc.data();
+    vertexInputInfo.vertexAttributeDescriptionCount = vertexAttribDesc.size();
+    vertexInputInfo.pVertexAttributeDescriptions = vertexAttribDesc.data();
 }
 
 void GraphicsPipelineBuilder::setPrimitiveTopology(VkPrimitiveTopology topology)

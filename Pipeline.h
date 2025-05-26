@@ -65,6 +65,9 @@ private:
     void init();
 
     std::vector<VkPipelineShaderStageCreateInfo> shaderStages;
+    std::string vertexShaderName;
+    std::string fragmentShaderName;
+
     std::vector<VkVertexInputBindingDescription> vertexBindingDesc;
     std::vector<VkVertexInputAttributeDescription> vertexAttribDesc;
     std::vector<VkFormat> colorAttachmentFormats;
