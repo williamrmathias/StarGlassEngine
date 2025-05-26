@@ -377,6 +377,19 @@ void RenderEngine::setSunDirection(float azimuth, float altitude)
     };
 }
 
+void RenderEngine::setViewMatrix(const glm::mat4 view)
+{
+    glm::mat4 projection = glm::perspective(glm::radians(45.f), 1280.f / 720.f, 0.1f, 100.f);
+    projection[1][1] *= -1; // correct gl -> vk
+
+    globalSceneData.viewproj = projection * view;
+}
+
+void RenderEngine::setViewPosition(const glm::vec3 viewPosition)
+{
+    globalSceneData.viewPosition = viewPosition;
+}
+
 void RenderEngine::setActiveDrawPipeline(PipelineType pipeline)
 {
     switch (pipeline)

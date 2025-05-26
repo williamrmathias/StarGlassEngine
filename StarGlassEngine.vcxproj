@@ -159,6 +159,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="Camera.cpp" />
     <ClCompile Include="Commands.cpp" />
     <ClCompile Include="Device.cpp" />
     <ClCompile Include="GLTFLoader.cpp" />
@@ -175,6 +176,7 @@
     <ClCompile Include="Resource.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Camera.h" />
     <ClInclude Include="Commands.h" />
     <ClInclude Include="Device.h" />
     <ClInclude Include="GLTFLoader.h" />

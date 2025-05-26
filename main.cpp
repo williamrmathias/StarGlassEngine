@@ -8,10 +8,12 @@
 #endif
 
 #include "RenderEngine.h"
+#include "Camera.h"
 
 // stl
 #include <cstdio>
 #include <iostream>
+#include <chrono>
 
 int main()
 {
@@ -33,11 +35,14 @@ int main()
     gfx::RenderEngine renderEngine;
     renderEngine.init(window);
 
+    Camera camera;
+
     // Poll for user input.
     bool stillRunning = true;
+
+    auto inputTimeStart = std::chrono::high_resolution_clock::now();
     while (stillRunning)
     {
-
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {
@@ -55,6 +60,7 @@ int main()
             }
 
             ImGui_ImplSDL2_ProcessEvent(&event); // Forward SDL event to ImGui
+            camera.processSDLEvent(event); // forward input to camera
         }
 
         // Start the Dear ImGui frame
@@ -87,6 +93,13 @@ int main()
 
         }
         ImGui::End();
+
+        // update camera
+        auto inputTimeEnd = std::chrono::high_resolution_clock::now();
+        camera.updatePosition(std::chrono::duration<float>(inputTimeStart - inputTimeEnd).count());
+        renderEngine.setViewMatrix(camera.getViewMatrix());
+        renderEngine.setViewPosition(camera.getViewPosition());
+        inputTimeStart = std::chrono::high_resolution_clock::now();
 
         // render scene
         renderEngine.render();
