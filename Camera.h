@@ -17,9 +17,15 @@ public:
     glm::mat4 getViewMatrix() const;
     glm::vec3 getViewPosition() const;
 
-    void processSDLEvent(SDL_Event& event);
+    void processSDLEvent(SDL_Event& event, Uint32 mouseState);
 
     void updatePosition(float deltaTIme);
+
+    float getSpeed() const { return speed; }
+    float getSensitivity() const { return sensitivity; }
+
+    void setSpeed(float newSpeed) { speed = newSpeed; }
+    void setSensitivity(float newSensitivity) { sensitivity = newSensitivity; }
 
 private:
     glm::vec3 position{ 0.f, 0.f, 0.f };
@@ -32,7 +38,7 @@ private:
 
     // camera settings
     float speed = 2.5f;
-    float sensitivity = 0.1f;;
+    float sensitivity = 0.5f;;
 
     // euler angles
     float yaw = -90.f;

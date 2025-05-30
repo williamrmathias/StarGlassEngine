@@ -59,8 +59,10 @@ int main()
                 break;
             }
 
+            Uint32 mouseState = SDL_GetMouseState(nullptr, nullptr);
+
             ImGui_ImplSDL2_ProcessEvent(&event); // Forward SDL event to ImGui
-            camera.processSDLEvent(event); // forward input to camera
+            camera.processSDLEvent(event, mouseState); // forward input to camera
         }
 
         // Start the Dear ImGui frame
@@ -69,27 +71,44 @@ int main()
         ImGui::NewFrame();
         if (ImGui::Begin("StarGlass Engine - Editor"))
         {
-            // azimuth: 0 to 360 degrees - where 0 is the angle of north
-            // altitude: -90 to 90 degrees - where 0 is the angle of the horizon
-            static float azimuth = 0, altitude = 0;
-            bool setSunDir = ImGui::SliderFloat("Sun: Azimuth", &azimuth, 0.f, 360.f);
-            setSunDir |= ImGui::SliderFloat("Sun: Altitude", &altitude, -90.f, 90.f);
-            
-            if (setSunDir)
-                renderEngine.setSunDirection(azimuth, altitude);
+            if (ImGui::CollapsingHeader("Global Scene Settings"))
+            {
+                // azimuth: 0 to 360 degrees - where 0 is the angle of north
+                // altitude: -90 to 90 degrees - where 0 is the angle of the horizon
+                static float azimuth = 0, altitude = 0;
+                bool setSunDir = ImGui::SliderFloat("Sun: Azimuth", &azimuth, 0.f, 360.f);
+                setSunDir |= ImGui::SliderFloat("Sun: Altitude", &altitude, -90.f, 90.f);
 
-            using PipelineType = gfx::RenderEngine::PipelineType;
-            static PipelineType pipeline = PipelineType::MainGraphics;
-            if (ImGui::Selectable("MainGraphics", pipeline == PipelineType::MainGraphics))
-                pipeline = PipelineType::MainGraphics;
-            if (ImGui::Selectable("BaseColorDebug", pipeline == PipelineType::BaseColorDebug))
-                pipeline = PipelineType::BaseColorDebug;
-            if (ImGui::Selectable("MetalDebug", pipeline == PipelineType::MetalDebug))
-                pipeline = PipelineType::MetalDebug;
-            if (ImGui::Selectable("RoughDebug", pipeline == PipelineType::RoughDebug))
-                pipeline = PipelineType::RoughDebug;
+                if (setSunDir)
+                    renderEngine.setSunDirection(azimuth, altitude);
+            }
 
-            renderEngine.setActiveDrawPipeline(pipeline);
+            if (ImGui::CollapsingHeader("Debug Shader Settings"))
+            {
+                using PipelineType = gfx::RenderEngine::PipelineType;
+                static PipelineType pipeline = PipelineType::MainGraphics;
+                if (ImGui::Selectable("MainGraphics", pipeline == PipelineType::MainGraphics))
+                    pipeline = PipelineType::MainGraphics;
+                if (ImGui::Selectable("BaseColorDebug", pipeline == PipelineType::BaseColorDebug))
+                    pipeline = PipelineType::BaseColorDebug;
+                if (ImGui::Selectable("MetalDebug", pipeline == PipelineType::MetalDebug))
+                    pipeline = PipelineType::MetalDebug;
+                if (ImGui::Selectable("RoughDebug", pipeline == PipelineType::RoughDebug))
+                    pipeline = PipelineType::RoughDebug;
+
+                renderEngine.setActiveDrawPipeline(pipeline);
+            }
+
+            if (ImGui::CollapsingHeader("Camera Settings"))
+            {
+                float speed = camera.getSpeed();
+                float sensitivity = camera.getSensitivity();
+                if (ImGui::SliderFloat("Speed", &speed, 0.f, 10.f))
+                    camera.setSpeed(speed);
+
+                if (ImGui::SliderFloat("Sensitivity", &sensitivity, 0.f, 1.f))
+                    camera.setSensitivity(sensitivity);
+            }
 
         }
         ImGui::End();

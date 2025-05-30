@@ -16,16 +16,17 @@ glm::vec3 Camera::getViewPosition() const
 	return position;
 }
 
-void Camera::processSDLEvent(SDL_Event& event)
+void Camera::processSDLEvent(SDL_Event& event, Uint32 mouseState)
 {
 	if (event.type == SDL_KEYDOWN)
 	{
+		// NOTE: Opposite keys overwrite each other. I don't know if I like it or not
 		if (event.key.keysym.sym == SDLK_w) { velocity.z = -1; }
 		if (event.key.keysym.sym == SDLK_s) { velocity.z = 1; }
-		if (event.key.keysym.sym == SDLK_a) { velocity.x = -1; }
-		if (event.key.keysym.sym == SDLK_d) { velocity.x = 1; }
-		if (event.key.keysym.sym == SDLK_e) { velocity.y = 1; }
-		if (event.key.keysym.sym == SDLK_q) { velocity.y = -1; }
+		if (event.key.keysym.sym == SDLK_a) { velocity.x = 1; }
+		if (event.key.keysym.sym == SDLK_d) { velocity.x = -1; }
+		if (event.key.keysym.sym == SDLK_e) { velocity.y = -1; }
+		if (event.key.keysym.sym == SDLK_q) { velocity.y = 1; }
 	}
 
 	if (event.type == SDL_KEYUP)
@@ -35,7 +36,7 @@ void Camera::processSDLEvent(SDL_Event& event)
 		if (event.key.keysym.sym == SDLK_e || event.key.keysym.sym == SDLK_q) { velocity.y = 0; }
 	}
 
-	if (event.type == SDL_MOUSEMOTION)
+	if ((mouseState & SDL_BUTTON(SDL_BUTTON_RIGHT)) && event.type == SDL_MOUSEMOTION)
 	{
 		yaw += static_cast<float>(event.motion.xrel) * sensitivity;
 		pitch -= static_cast<float>(event.motion.yrel) * sensitivity;
