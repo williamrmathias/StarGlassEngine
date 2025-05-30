@@ -377,6 +377,19 @@ void RenderEngine::setSunDirection(float azimuth, float altitude)
     };
 }
 
+void RenderEngine::setViewMatrix(const glm::mat4 view)
+{
+    glm::mat4 projection = glm::perspective(glm::radians(45.f), 1280.f / 720.f, 0.1f, 100.f);
+    projection[1][1] *= -1; // correct gl -> vk
+
+    globalSceneData.viewproj = projection * view;
+}
+
+void RenderEngine::setViewPosition(const glm::vec3 viewPosition)
+{
+    globalSceneData.viewPosition = viewPosition;
+}
+
 void RenderEngine::setActiveDrawPipeline(PipelineType pipeline)
 {
     switch (pipeline)
@@ -763,7 +776,7 @@ void RenderEngine::initScene()
     setSunDirection(0.f, 0.f);
 
     // load gltf
-    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/structure.glb");
+    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/BoxTextured.glb");
     loadedGltf = std::make_unique<LoadedGltf>(this, gltfPath.string().c_str());
 }
 

@@ -131,6 +131,8 @@ public:
     void cleanup();
 
     void setSunDirection(float azimuth, float altitude);
+    void setViewMatrix(const glm::mat4 view);
+    void setViewPosition(const glm::vec3 viewPosition);
     void setActiveDrawPipeline(PipelineType pipeline);
 
     GlobalSceneData& getGlobalSceneData() { return globalSceneData; }
