@@ -22,6 +22,7 @@
 // stl
 #include <span>
 #include <utility>
+#include <filesystem>
 
 VkVertexInputBindingDescription Vertex::getInputBindingDescription()
 {
@@ -255,6 +256,7 @@ struct ScopedSTBImage
 void LoadedGltf::loadImages(std::span<cgltf_image> gltfImages)
 {
     images.reserve(images.size() + gltfImages.size());
+    std::filesystem::path imageUriPath;
 
     for (const cgltf_image& image : gltfImages)
     {
@@ -264,7 +266,17 @@ void LoadedGltf::loadImages(std::span<cgltf_image> gltfImages)
 
         if (image.uri)
         {
-            imageData.data = stbi_load(image.uri, &width, &height, &nChannels, STBI_rgb_alpha);
+            imageUriPath = path.parent_path() / image.uri;
+            imageData.data = stbi_load(
+                imageUriPath.string().c_str(),
+                &width, &height, &nChannels, STBI_rgb_alpha
+            );
+            if (!imageData.data)
+            {
+                // use error fallback image
+                SDL_LogError(0, "GLTF load error: input image has invalid uri: %s", image.name);
+                continue;
+            }
         }
         else if (image.buffer_view)
         {
@@ -449,7 +461,7 @@ void LoadedGltf::loadTextures(std::span<cgltf_texture> gltfTextures)
 
     for (const cgltf_texture& texture : gltfTextures)
     {
-        Texture newTexture = {.image = invalidAssetId, .sampler = invalidAssetId};
+        Texture newTexture = {.image = errorHandle, .sampler = defaultHandle };
         if (texture.image)
         {
             newTexture.image = imageMap[getImageId(*texture.image)];
@@ -965,7 +977,7 @@ static glm::mat4 getNodeMatrix(const cgltf_node& node, const glm::mat4& parentTr
 
 MeshNode LoadedGltf::createMeshNode(const cgltf_mesh& mesh, const glm::mat4& transform)
 {
-    MeshNode newMeshNode{ .mesh = invalidAssetId, .transform = transform };
+    MeshNode newMeshNode{ .mesh = defaultHandle, .transform = transform };
 
     std::vector<MeshPrimitive> primitives(mesh.primitives_count);
     for (cgltf_size i = 0; i < mesh.primitives_count; i++)
@@ -1023,7 +1035,7 @@ struct ScopedGLTFData
 };
 
 LoadedGltf::LoadedGltf(gfx::RenderEngine* renderEngine, std::string_view gltfPath)
-    : engine(renderEngine)
+    : engine(renderEngine), path(gltfPath)
 {
     cgltf_options options{}; // default loading options
     ScopedGLTFData gltfData;

@@ -11,6 +11,8 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <string>
+#include <filesystem>
 
 // cgltf
 #include <cgltf.h>
@@ -142,6 +144,7 @@ public:
 
 private:
     gfx::RenderEngine* engine;
+    std::filesystem::path path;
 
     void initDefaultAssets();
 

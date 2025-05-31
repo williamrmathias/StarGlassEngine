@@ -776,7 +776,7 @@ void RenderEngine::initScene()
     setSunDirection(0.f, 0.f);
 
     // load gltf
-    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/BoxTextured.glb");
+    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/Box With Spaces/Box With Spaces.gltf");
     loadedGltf = std::make_unique<LoadedGltf>(this, gltfPath.string().c_str());
 }
 
