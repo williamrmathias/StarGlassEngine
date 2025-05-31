@@ -257,6 +257,7 @@ void LoadedGltf::loadImages(std::span<cgltf_image> gltfImages)
 {
     images.reserve(images.size() + gltfImages.size());
     std::filesystem::path imageUriPath;
+    std::string decodedURI;
 
     for (const cgltf_image& image : gltfImages)
     {
@@ -266,7 +267,8 @@ void LoadedGltf::loadImages(std::span<cgltf_image> gltfImages)
 
         if (image.uri)
         {
-            imageUriPath = path.parent_path() / image.uri;
+            util::scratchDecodeURI(image.uri, decodedURI);
+            imageUriPath = path.parent_path() / decodedURI;
             imageData.data = stbi_load(
                 imageUriPath.string().c_str(),
                 &width, &height, &nChannels, STBI_rgb_alpha
