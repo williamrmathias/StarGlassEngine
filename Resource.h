@@ -42,7 +42,7 @@ struct AllocatedImage
 };
 
 AllocatedImage createAllocatedImage(
-    Device* device, VkImageUsageFlags usage, VkFormat format, VkExtent2D extents);
+    Device* device, VkImageUsageFlags usage, VkFormat format, VkExtent2D extents, bool useMips);
 
 void destroyAllocatedImage(Device* device, AllocatedImage image);
 

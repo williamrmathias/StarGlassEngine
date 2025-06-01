@@ -44,7 +44,7 @@ namespace gfx
 {
 
 static const size_t NUM_FRAMES = 2;
-static const uint32_t NUM_MATERIALS_MAX = 100;
+static const uint32_t NUM_MATERIALS_MAX = 1000;
 
 struct GlobalSceneData
 {

@@ -83,7 +83,7 @@ void LoadedGltf::initDefaultAssets()
 
         gfx::AllocatedImage newImage = gfx::createAllocatedImage(
             device, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-            VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ 1, 1 }
+            VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ 1, 1 }, /*useMips*/false
         );
 
         VkImageSubresourceLayers subresource{
@@ -124,7 +124,7 @@ void LoadedGltf::initDefaultAssets()
             black,   magenta
         };
 
-        VkDeviceSize imageDataSize = static_cast<VkDeviceSize>(1 * 1 * STBI_rgb_alpha);
+        VkDeviceSize imageDataSize = static_cast<VkDeviceSize>(2 * 2 * STBI_rgb_alpha);
 
         gfx::Device* device = engine->device.get();
 
@@ -136,8 +136,9 @@ void LoadedGltf::initDefaultAssets()
         gfx::writeToAllocatedBuffer(device, checkerData, imageDataSize, stagingBuffer);
 
         gfx::AllocatedImage newImage = gfx::createAllocatedImage(
-            device, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-            VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ 1, 1 }
+            device, 
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+            VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ 2, 2 }, /*useMips*/true
         );
 
         VkImageSubresourceLayers subresource{
@@ -153,9 +154,15 @@ void LoadedGltf::initDefaultAssets()
             stagingBuffer, newImage,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_ASPECT_COLOR_BIT
         );
+        gfx::generateMipmaps(
+            cmd,
+            newImage.image, newImage.extents,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT
+        );
         gfx::transitionImageLayoutCoarse(
             cmd, newImage.image,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_IMAGE_ASPECT_COLOR_BIT
         );
         engine->endAndSubmitImmediateCommands();
@@ -309,8 +316,10 @@ void LoadedGltf::loadImages(std::span<cgltf_image> gltfImages)
         gfx::writeToAllocatedBuffer(device, imageData.data, imageDataSize, stagingBuffer);
 
         gfx::AllocatedImage newImage = gfx::createAllocatedImage(
-            device, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-            VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ static_cast<uint32_t>(width), static_cast<uint32_t>(height) }
+            device, 
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+            VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ static_cast<uint32_t>(width), static_cast<uint32_t>(height) },
+            /*useMips*/true
         );
 
         VkImageSubresourceLayers subresource{
@@ -324,11 +333,18 @@ void LoadedGltf::loadImages(std::span<cgltf_image> gltfImages)
         gfx::copyBufferToImage(
             cmd,
             stagingBuffer, newImage,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_ASPECT_COLOR_BIT
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_ASPECT_COLOR_BIT
+        );
+        gfx::generateMipmaps(
+            cmd,
+            newImage.image, newImage.extents,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT
         );
         gfx::transitionImageLayoutCoarse(
             cmd, newImage.image,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_IMAGE_ASPECT_COLOR_BIT
         );
        engine->endAndSubmitImmediateCommands();
@@ -829,7 +845,7 @@ LoadedGltf::BufferDesc LoadedGltf::loadVertexBuffer(const cgltf_primitive& primi
     auto entry = bufferMap.find(vertexBufferId);
     if (entry != bufferMap.end())
     {
-        // index buffer already exists; return it
+        // vertex buffer already exists; return it
         return { entry->second, vertexCount };
     }
 
