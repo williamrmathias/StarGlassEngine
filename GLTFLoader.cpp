@@ -83,7 +83,7 @@ void LoadedGltf::initDefaultAssets()
 
         gfx::AllocatedImage newImage = gfx::createAllocatedImage(
             device, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-            VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ 1, 1 }
+            VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ 1, 1 }, /*useMips*/false
         );
 
         VkImageSubresourceLayers subresource{
@@ -124,7 +124,7 @@ void LoadedGltf::initDefaultAssets()
             black,   magenta
         };
 
-        VkDeviceSize imageDataSize = static_cast<VkDeviceSize>(1 * 1 * STBI_rgb_alpha);
+        VkDeviceSize imageDataSize = static_cast<VkDeviceSize>(2 * 2 * STBI_rgb_alpha);
 
         gfx::Device* device = engine->device.get();
 
@@ -136,8 +136,9 @@ void LoadedGltf::initDefaultAssets()
         gfx::writeToAllocatedBuffer(device, checkerData, imageDataSize, stagingBuffer);
 
         gfx::AllocatedImage newImage = gfx::createAllocatedImage(
-            device, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-            VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ 1, 1 }
+            device, 
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+            VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ 2, 2 }, /*useMips*/true
         );
 
         VkImageSubresourceLayers subresource{
@@ -153,9 +154,15 @@ void LoadedGltf::initDefaultAssets()
             stagingBuffer, newImage,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_ASPECT_COLOR_BIT
         );
+        gfx::generateMipmaps(
+            cmd,
+            newImage.image, newImage.extents,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT
+        );
         gfx::transitionImageLayoutCoarse(
             cmd, newImage.image,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_IMAGE_ASPECT_COLOR_BIT
         );
         engine->endAndSubmitImmediateCommands();
@@ -175,25 +182,15 @@ void LoadedGltf::initDefaultAssets()
 
     {
         // default sampler (linear filter - repeat wrap)
-        VkFilter magFilter = VK_FILTER_LINEAR;
-        VkFilter minFilter = VK_FILTER_LINEAR;
-        VkSamplerAddressMode uWrap = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        VkSamplerAddressMode vWrap = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        gfx::SamplerDesc samplerDescription = gfx::SamplerDesc::initDefault();
 
-        VkSampler newSampler = gfx::createSampler(
-            engine->device.get(), magFilter, minFilter, uWrap, vWrap
-        );
+        VkSampler newSampler = gfx::createSampler(engine->device.get(), samplerDescription);
 
         samplers.push_back(newSampler);
         samplerMap[invalidAssetId] = defaultHandle;
 
         // also map content hash here
-        const uint32_t data[4] = {
-            static_cast<uint32_t>(magFilter), static_cast<uint32_t>(minFilter),
-            static_cast<uint32_t>(uWrap) , static_cast<uint32_t>(vWrap)
-        };
-
-        AssetId id = util::fastHash(data, 4 * sizeof(data[0]));
+        AssetId id = util::fastHash(&samplerDescription, sizeof(samplerDescription));
         samplerMap[id] = defaultHandle;
     }
 
@@ -309,8 +306,10 @@ void LoadedGltf::loadImages(std::span<cgltf_image> gltfImages)
         gfx::writeToAllocatedBuffer(device, imageData.data, imageDataSize, stagingBuffer);
 
         gfx::AllocatedImage newImage = gfx::createAllocatedImage(
-            device, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-            VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ static_cast<uint32_t>(width), static_cast<uint32_t>(height) }
+            device, 
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+            VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ static_cast<uint32_t>(width), static_cast<uint32_t>(height) },
+            /*useMips*/true
         );
 
         VkImageSubresourceLayers subresource{
@@ -324,11 +323,18 @@ void LoadedGltf::loadImages(std::span<cgltf_image> gltfImages)
         gfx::copyBufferToImage(
             cmd,
             stagingBuffer, newImage,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_ASPECT_COLOR_BIT
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_ASPECT_COLOR_BIT
+        );
+        gfx::generateMipmaps(
+            cmd,
+            newImage.image, newImage.extents,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT
         );
         gfx::transitionImageLayoutCoarse(
             cmd, newImage.image,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_IMAGE_ASPECT_COLOR_BIT
         );
        engine->endAndSubmitImmediateCommands();
@@ -343,20 +349,20 @@ void LoadedGltf::loadImages(std::span<cgltf_image> gltfImages)
     }
 }
 
-static void extractSamplerFiltersAndWrap(
-    const cgltf_sampler& sampler,
-    VkFilter& magFilter, VkFilter& minFilter,
-    VkSamplerAddressMode& uWrap, VkSamplerAddressMode& vWrap
+static gfx::SamplerDesc extractSamplerDesc(
+    const cgltf_sampler& sampler
 )
 {
+    gfx::SamplerDesc samplerDescription;
+
     switch (sampler.mag_filter)
     {
     case cgltf_filter_type_nearest:
-        magFilter = VK_FILTER_NEAREST;
+        samplerDescription.magFilter = VK_FILTER_NEAREST;
         break;
     case cgltf_filter_type_linear:
     default:
-        magFilter = VK_FILTER_LINEAR;
+        samplerDescription.magFilter = VK_FILTER_LINEAR;
         break;
     }
 
@@ -365,56 +371,66 @@ static void extractSamplerFiltersAndWrap(
     case cgltf_filter_type_nearest:
     case cgltf_filter_type_nearest_mipmap_nearest:
     case cgltf_filter_type_nearest_mipmap_linear:
-        minFilter = VK_FILTER_NEAREST;
+        samplerDescription.minFilter = VK_FILTER_NEAREST;
         break;
     case cgltf_filter_type_linear:
     case cgltf_filter_type_linear_mipmap_nearest:
     case cgltf_filter_type_linear_mipmap_linear:
     default:
-        minFilter = VK_FILTER_LINEAR;
+        samplerDescription.minFilter = VK_FILTER_LINEAR;
+        break;
+    }
+
+    switch (sampler.min_filter)
+    {
+    case cgltf_filter_type_nearest:
+    case cgltf_filter_type_linear:
+        samplerDescription.mipmapMode = gfx::MipmapMode::None;
+        break;
+    case cgltf_filter_type_nearest_mipmap_nearest:
+    case cgltf_filter_type_linear_mipmap_nearest:
+        samplerDescription.mipmapMode = gfx::MipmapMode::NearestNeighbor;
+        break;
+    case cgltf_filter_type_nearest_mipmap_linear:
+    case cgltf_filter_type_linear_mipmap_linear:
+    default:
+        samplerDescription.mipmapMode = gfx::MipmapMode::Linear;
         break;
     }
 
     switch (sampler.wrap_s)
     {
     case cgltf_wrap_mode_clamp_to_edge:
-        uWrap = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerDescription.uWrap = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         break;
     case cgltf_wrap_mode_mirrored_repeat:
-        uWrap = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+        samplerDescription.uWrap = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
         break;
     case cgltf_wrap_mode_repeat:
-        uWrap = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        samplerDescription.uWrap = VK_SAMPLER_ADDRESS_MODE_REPEAT;
         break;
     }
 
     switch (sampler.wrap_t)
     {
     case cgltf_wrap_mode_clamp_to_edge:
-        vWrap = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerDescription.vWrap = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         break;
     case cgltf_wrap_mode_mirrored_repeat:
-        vWrap = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+        samplerDescription.vWrap = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
         break;
     case cgltf_wrap_mode_repeat:
-        vWrap = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        samplerDescription.vWrap = VK_SAMPLER_ADDRESS_MODE_REPEAT;
         break;
     }
+
+    return samplerDescription;
 }
 
 static AssetId getSamplerId(const cgltf_sampler& sampler)
 {
-    VkFilter magFilter, minFilter;
-    VkSamplerAddressMode uWrap, vWrap;
-
-    extractSamplerFiltersAndWrap(sampler, magFilter, minFilter, uWrap, vWrap);
-
-    const uint32_t data[4] = { 
-        static_cast<uint32_t>(magFilter), static_cast<uint32_t>(minFilter),
-        static_cast<uint32_t>(uWrap) , static_cast<uint32_t>(vWrap) 
-    };
-
-    return util::fastHash(data, 4 * sizeof(data[0]));
+    gfx::SamplerDesc desc = extractSamplerDesc(sampler);
+    return util::fastHash(&desc, sizeof(desc));
 }
 
 void LoadedGltf::loadSamplers(std::span<cgltf_sampler> gltfSamplers)
@@ -423,14 +439,9 @@ void LoadedGltf::loadSamplers(std::span<cgltf_sampler> gltfSamplers)
 
     for (const cgltf_sampler& sampler : gltfSamplers)
     {
-        VkFilter magFilter, minFilter;
-        VkSamplerAddressMode uWrap, vWrap;
+        gfx::SamplerDesc desc = extractSamplerDesc(sampler);
 
-        extractSamplerFiltersAndWrap(sampler, magFilter, minFilter, uWrap, vWrap);
-
-        VkSampler newSampler = gfx::createSampler(
-            engine->device.get(), magFilter, minFilter, uWrap, vWrap
-        );
+        VkSampler newSampler = gfx::createSampler(engine->device.get(), desc);
 
         SamplerHandle handle = samplers.size();
         AssetId id = getSamplerId(sampler);
@@ -829,7 +840,7 @@ LoadedGltf::BufferDesc LoadedGltf::loadVertexBuffer(const cgltf_primitive& primi
     auto entry = bufferMap.find(vertexBufferId);
     if (entry != bufferMap.end())
     {
-        // index buffer already exists; return it
+        // vertex buffer already exists; return it
         return { entry->second, vertexCount };
     }
 
@@ -896,7 +907,7 @@ MeshPrimitive LoadedGltf::createMeshPrimitive(const cgltf_primitive& primitive)
         newPrimitive.indexCount = static_cast<uint32_t>(indexDesc.numElements);
         newPrimitive.indexType = indexDesc.elementSize == 4 ?
             VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
-    }
+        }
     else
     {
         SDL_LogError(0, "Mesh load error: Mesh primitive is non indexed");
@@ -908,7 +919,7 @@ MeshPrimitive LoadedGltf::createMeshPrimitive(const cgltf_primitive& primitive)
         BufferDesc vertexDesc = loadVertexBuffer(primitive);
         newPrimitive.vertexBuffer = vertexDesc.handle;
         newPrimitive.vertexCount = static_cast<uint32_t>(vertexDesc.numElements);
-    }
+        }
 
     // get material
     newPrimitive.material = defaultHandle;
@@ -936,7 +947,7 @@ void LoadedGltf::loadMeshes(std::span<cgltf_mesh> gltfMeshes)
     for (const cgltf_mesh& mesh : gltfMeshes)
     {
         Mesh newMesh;
-        newMesh.primitives.resize(mesh.primitives_count);
+        newMesh.primitives.reserve(mesh.primitives_count);
         AssetId meshId = 0;
 
         for (cgltf_size i = 0; i < mesh.primitives_count; i++)

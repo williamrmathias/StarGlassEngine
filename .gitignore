@@ -365,3 +365,6 @@ FodyWeavers.xsd
 *.spirvdxc
 *.cap
 /imgui.ini
+/Assets/Sponza
+/Assets/2CylinderEngine.gltf
+/Assets/Bistro.glb

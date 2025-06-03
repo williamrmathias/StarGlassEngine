@@ -42,7 +42,7 @@ struct AllocatedImage
 };
 
 AllocatedImage createAllocatedImage(
-    Device* device, VkImageUsageFlags usage, VkFormat format, VkExtent2D extents);
+    Device* device, VkImageUsageFlags usage, VkFormat format, VkExtent2D extents, bool useMips);
 
 void destroyAllocatedImage(Device* device, AllocatedImage image);
 
@@ -56,10 +56,31 @@ VkImageView createImageView(
 /*
 * VkSampler
 */
+
+// use 4 bytes to fill out padding of struct below
+enum class MipmapMode : uint32_t
+{
+    None,
+    Linear,
+    NearestNeighbor
+};
+
+struct SamplerDesc
+{
+    VkFilter magFilter = VK_FILTER_LINEAR;
+    VkFilter minFilter = VK_FILTER_LINEAR;
+
+    VkSamplerAddressMode uWrap = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    VkSamplerAddressMode vWrap = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+
+    MipmapMode mipmapMode = MipmapMode::Linear;
+
+    static SamplerDesc initDefault() { return SamplerDesc(); }
+};
+
 VkSampler createSampler(
     Device* device,
-    VkFilter magFilter, VkFilter minFilter,
-    VkSamplerAddressMode uWrap, VkSamplerAddressMode vWrap
+    SamplerDesc samplerDescription
 );
 
 } // namespace gfx

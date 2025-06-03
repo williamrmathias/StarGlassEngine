@@ -2,6 +2,10 @@
 #include "Resource.h"
 #include "Log.h"
 
+// stl
+#include <algorithm>
+#include <cmath>
+
 namespace gfx
 {
 
@@ -55,9 +59,11 @@ void writeToAllocatedBuffer(
 }
 
 AllocatedImage createAllocatedImage(
-    Device* device, VkImageUsageFlags usage, VkFormat format, VkExtent2D extents)
+    Device* device, VkImageUsageFlags usage, VkFormat format, VkExtent2D extents, bool useMips)
 {
     AllocatedImage image;
+
+    uint32_t maxDimension = std::max(extents.width, extents.height);
 
     // create image and allocation
     VkImageCreateInfo imageInfo{
@@ -67,7 +73,7 @@ AllocatedImage createAllocatedImage(
         .imageType = VK_IMAGE_TYPE_2D,
         .format = format,
         .extent = VkExtent3D{.width = extents.width, .height = extents.height, .depth = 1},
-        .mipLevels = 1,
+        .mipLevels = useMips ? static_cast<uint32_t>(std::floor(std::log2(maxDimension))) + 1 : 1,
         .arrayLayers = 1,
         .samples = VK_SAMPLE_COUNT_1_BIT,
         .tiling = VK_IMAGE_TILING_OPTIMAL,
@@ -137,19 +143,23 @@ VkImageView createImageView(
 
 VkSampler createSampler(
     Device* device,
-    VkFilter magFilter, VkFilter minFilter,
-    VkSamplerAddressMode uWrap, VkSamplerAddressMode vWrap
+    SamplerDesc samplerDescription
 )
 {
+    VkSamplerMipmapMode mipmapMode = (samplerDescription.mipmapMode == MipmapMode::NearestNeighbor) 
+        ? VK_SAMPLER_MIPMAP_MODE_NEAREST : VK_SAMPLER_MIPMAP_MODE_LINEAR;
+
+    float maxLod = (samplerDescription.mipmapMode == MipmapMode::None) ? 0.f : VK_LOD_CLAMP_NONE;
+
     VkSamplerCreateInfo samplerInfo{
         .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
-        .magFilter = magFilter,
-        .minFilter = minFilter,
-        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST, // no mipmaps for now
-        .addressModeU = uWrap,
-        .addressModeV = vWrap,
+        .magFilter = samplerDescription.magFilter,
+        .minFilter = samplerDescription.minFilter,
+        .mipmapMode = mipmapMode,
+        .addressModeU = samplerDescription.uWrap,
+        .addressModeV = samplerDescription.vWrap,
         .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT, // no 3d textures for now
         .mipLodBias = 0.f,
         .anisotropyEnable = VK_FALSE,
@@ -157,7 +167,7 @@ VkSampler createSampler(
         .compareEnable = VK_FALSE,
         .compareOp = VK_COMPARE_OP_NEVER,
         .minLod = 0.f,
-        .maxLod = 0.f,
+        .maxLod = maxLod,
         .borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK,
         .unnormalizedCoordinates = VK_FALSE
     };

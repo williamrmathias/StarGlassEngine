@@ -428,7 +428,7 @@ void RenderEngine::initColorTarget()
     colorImage = gfx::createAllocatedImage(
         device.get(),
         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-        colorFormat, device->swapchain.swapchainExtent
+        colorFormat, device->swapchain.swapchainExtent, /*useMips*/false
     );
 
     colorView = createImageView(device.get(), colorImage.image, colorImage.format, VK_IMAGE_ASPECT_COLOR_BIT);
@@ -451,7 +451,7 @@ void RenderEngine::initDepthTarget()
     depthImage = gfx::createAllocatedImage(
         device.get(), 
         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 
-        depthFormat, device->swapchain.swapchainExtent
+        depthFormat, device->swapchain.swapchainExtent, /*useMips*/false
     );
 
     depthView = createImageView(device.get(), depthImage.image, depthImage.format, VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -776,7 +776,7 @@ void RenderEngine::initScene()
     setSunDirection(0.f, 0.f);
 
     // load gltf
-    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/Box With Spaces/Box With Spaces.gltf");
+    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/Sponza/Sponza.gltf");
     loadedGltf = std::make_unique<LoadedGltf>(this, gltfPath.string().c_str());
 }
 
