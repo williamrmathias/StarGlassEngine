@@ -143,19 +143,23 @@ VkImageView createImageView(
 
 VkSampler createSampler(
     Device* device,
-    VkFilter magFilter, VkFilter minFilter,
-    VkSamplerAddressMode uWrap, VkSamplerAddressMode vWrap
+    SamplerDesc samplerDescription
 )
 {
+    VkSamplerMipmapMode mipmapMode = (samplerDescription.mipmapMode == MipmapMode::NearestNeighbor) 
+        ? VK_SAMPLER_MIPMAP_MODE_NEAREST : VK_SAMPLER_MIPMAP_MODE_LINEAR;
+
+    float maxLod = (samplerDescription.mipmapMode == MipmapMode::None) ? 0.f : VK_LOD_CLAMP_NONE;
+
     VkSamplerCreateInfo samplerInfo{
         .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
-        .magFilter = magFilter,
-        .minFilter = minFilter,
-        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR, // no mipmaps for now
-        .addressModeU = uWrap,
-        .addressModeV = vWrap,
+        .magFilter = samplerDescription.magFilter,
+        .minFilter = samplerDescription.minFilter,
+        .mipmapMode = mipmapMode,
+        .addressModeU = samplerDescription.uWrap,
+        .addressModeV = samplerDescription.vWrap,
         .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT, // no 3d textures for now
         .mipLodBias = 0.f,
         .anisotropyEnable = VK_FALSE,
@@ -163,7 +167,7 @@ VkSampler createSampler(
         .compareEnable = VK_FALSE,
         .compareOp = VK_COMPARE_OP_NEVER,
         .minLod = 0.f,
-        .maxLod = VK_LOD_CLAMP_NONE,
+        .maxLod = maxLod,
         .borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK,
         .unnormalizedCoordinates = VK_FALSE
     };
