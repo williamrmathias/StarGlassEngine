@@ -912,7 +912,7 @@ MeshPrimitive LoadedGltf::createMeshPrimitive(const cgltf_primitive& primitive)
         newPrimitive.indexCount = static_cast<uint32_t>(indexDesc.numElements);
         newPrimitive.indexType = indexDesc.elementSize == 4 ?
             VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
-    }
+        }
     else
     {
         SDL_LogError(0, "Mesh load error: Mesh primitive is non indexed");
@@ -924,7 +924,7 @@ MeshPrimitive LoadedGltf::createMeshPrimitive(const cgltf_primitive& primitive)
         BufferDesc vertexDesc = loadVertexBuffer(primitive);
         newPrimitive.vertexBuffer = vertexDesc.handle;
         newPrimitive.vertexCount = static_cast<uint32_t>(vertexDesc.numElements);
-    }
+        }
 
     // get material
     newPrimitive.material = defaultHandle;
@@ -952,7 +952,7 @@ void LoadedGltf::loadMeshes(std::span<cgltf_mesh> gltfMeshes)
     for (const cgltf_mesh& mesh : gltfMeshes)
     {
         Mesh newMesh;
-        newMesh.primitives.resize(mesh.primitives_count);
+        newMesh.primitives.reserve(mesh.primitives_count);
         AssetId meshId = 0;
 
         for (cgltf_size i = 0; i < mesh.primitives_count; i++)
