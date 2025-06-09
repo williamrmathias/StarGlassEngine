@@ -81,33 +81,47 @@ VertexOutput simpleVS(VertexInput input)
     return output;
 }
 
+// ------------------------
+// Specular BRDF (https://google.github.io/filament/Filament.html#materialsystem/specularbrdf)
+// ------------------------
+
 // microfacet normal distribution function based on the Trowbridge-Reitz / GGX distribution
-float distribution(float NdotH, float alpha)
+// Walter et al. 2007, "Microfacet Models for Refraction through Rough Surfaces"
+float D_GGX(float NdotH, float alpha)
 {
-    float a = NdotH * alpha;
-    float k = alpha / (1.f - NdotH * NdotH + a * a);
-    return k * k * (1.f / PI);
+    float alpha2 = alpha * alpha;
+    float f = (NdotH * alpha2 - NdotH) * NdotH + 1.f;
+    return alpha2 / (PI * f * f);
 }
 
 // visibility function based on height-corrected Smith Geometric Shadowing
-float visibility(float NdotV, float NdotL, float alpha)
+// Heitz 2014, "Understanding the Masking-Shadowing Function in Microfacet-Based BRDFs"
+float V_SmithGGXCorrelated(float NdotV, float NdotL, float alpha)
 {
     float alpha2 = alpha * alpha;
-    float lambdaV = NdotL * sqrt(NdotV * NdotV * (1.f - alpha2) + alpha2);
-    float lambdaL = NdotV * sqrt(NdotL * NdotL * (1.f - alpha2) + alpha2);
-    return 0.5f / (lambdaV + lambdaL);
+    float GGXL = NdotV * sqrt((-NdotL * alpha2 + NdotL) * NdotL + alpha2);
+    float GGXV = NdotL * sqrt((-NdotV * alpha2 + NdotV) * NdotV + alpha2);
+    return 0.5f / (GGXV + GGXL);
 }
 
 // Fresnel term based on Schlick's approximation
-// Reflectance at grazing angles (f90) is assumed ti be 1
-float3 fresnel(const float3 f0, float VdotH)
+// Reflectance at grazing angles (f90) is assumed to be 1
+// Schlick 1994, "An Inexpensive BRDF Model for Physically-Based Rendering"
+float3 F_Schlick(float u, float3 f0)
 {
-    float f = pow(1.f - VdotH, 5.f);
-    return f + f0 * (1.f - f);
+    return f0 + (float3(1.f, 1.f, 1.f) - f0) * pow(1.f - u, 5.f);
 }
 
 // Cook-Torrance specular microfacet model
-float3 specularBRDF(float roughness, float3 viewDir, float3 lightDir, float3 normal, float3 halfway)
+float3 specularBRDF(
+    float3 baseColor,
+    float roughness,
+    float metalness,
+    float3 viewDir, 
+    float3 lightDir,
+    float3 normal,
+    float3 halfway
+)
 {
     float NdotV = abs(dot(normal, viewDir)) + EPSILON;
     float NdotL = clamp(dot(normal, lightDir), 0.f, 1.f);
@@ -118,9 +132,12 @@ float3 specularBRDF(float roughness, float3 viewDir, float3 lightDir, float3 nor
     // alpha is a more physically accurate value
     float alpha = roughness * roughness;
     
-    float D = distribution(NdotH, alpha);
-    float V = visibility(NdotV, NdotL, alpha);
-    float3 F = fresnel(float3(0.04f, 0.04f, 0.04f), LdotH);
+    float D = D_GGX(NdotH, alpha);
+    float V = V_SmithGGXCorrelated(NdotV, NdotL, alpha);
+    
+    float reflectance = 0.5f;
+    float3 f0 = 0.16f * reflectance * reflectance * (1.f - metalness) + baseColor * metalness;
+    float3 F = F_Schlick(LdotH, f0);
     
     return (D * V) * F;
 }
@@ -141,17 +158,20 @@ PixelOutput simplePS(VertexOutput input)
     float4 baseColor = baseColorSample * pushConstants.material.baseColorFactor * input.color;
     
     float roughness = metalRoughSample.g * pushConstants.material.roughnessFactor;
-    float rough2 = roughness * roughness;
+    float metalness = metalRoughSample.b * pushConstants.material.metalnessFactor;
     
     float3 viewDirection = normalize(globalSceneData.viewPosition - input.positionWorld);
     float3 lightDirection = normalize(globalSceneData.lightDirection);
     float3 normal = normalize(input.normalWorld);
     float3 halfway = normalize(viewDirection + lightDirection);
     
-    float3 diffuse = diffuseBRDF(baseColor.rgb);
-    float3 specular = specularBRDF(rough2, viewDirection, lightDirection, normal, halfway);
+    float3 diffuseColor = lerp(baseColor.rgb, 0.f, metalness);
+    float3 diffuse = diffuseBRDF(diffuseColor);
+    float3 specular = specularBRDF(
+        baseColor.rgb, roughness, metalness,
+        viewDirection, lightDirection, normal, halfway
+    );
     
-    //result.color = float4(lerp(diffuse, specular, fresnel), 1.f);
     result.color = float4(diffuse + specular, 1.f);
     return result;
 }
