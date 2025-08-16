@@ -693,7 +693,7 @@ void RenderEngine::initGraphicsPipelines()
 
         // IA info
         VkVertexInputBindingDescription vertexBindingDesc = Vertex::getInputBindingDescription();
-        std::array<VkVertexInputAttributeDescription, 4> vertexAttribDesc = Vertex::getInputAttributeDescription();
+        std::array<VkVertexInputAttributeDescription, 5> vertexAttribDesc = Vertex::getInputAttributeDescription();
         pipelineBuilder.setVertexInputState(std::span{ &vertexBindingDesc, 1 }, vertexAttribDesc);
         pipelineBuilder.setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
 

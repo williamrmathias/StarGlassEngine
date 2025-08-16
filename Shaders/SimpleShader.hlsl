@@ -56,16 +56,19 @@ struct VertexInput
 {
     [[vk::location(0)]] float3 position : POSITION0;
     [[vk::location(1)]] float3 normal : NORMAL0;
-    [[vk::location(2)]] float2 uv : TEXCOORD0;
-    [[vk::location(3)]] float4 color : COLOR0;
+    [[vk::location(2)]] float4 tangent : TANGENT0;
+    [[vk::location(3)]] float2 uv : TEXCOORD0;
+    [[vk::location(4)]] float4 color : COLOR0;
 };
 
 struct VertexOutput
 {
     float4 position : SV_Position;
     float3 positionWorld : TEXCOORD0;
-    float3 normalWorld : NORMAL0;
-    float2 uv : TEXCOORD1;
+    float3 tangent : TEXCOORD1;
+    float3 normal : TEXCOORD2;
+    float3 binormal : TEXCOORD3;
+    float2 uv : TEXCOORD4;
     float4 color : COLOR0;
 };
 
@@ -81,7 +84,13 @@ VertexOutput simpleVS(VertexInput input)
     output.position = mul(mvp, float4(input.position, 1.f));
     output.positionWorld = mul(pushConstants.model, float4(input.position, 1.f)).xyz;
     
-    output.normalWorld = mul(pushConstants.model, float4(input.normal, 0.f)).xyz;
+    float3 N = mul(pushConstants.model, float4(input.normal, 0.f)).xyz;
+    float3 T = mul(pushConstants.model, float4(input.tangent.xyz, 0.f)).xyz;
+    float3 B = cross(N, T) * input.tangent.w;
+    
+    output.tangent = T;
+    output.normal = N;
+    output.binormal = B;
     output.uv = input.uv;
     output.color = input.color;
     return output;
@@ -169,8 +178,12 @@ PixelOutput simplePS(VertexOutput input)
     
     float3 viewDirection = normalize(globalSceneData.viewPosition - input.positionWorld);
     float3 lightDirection = normalize(globalSceneData.lightDirection);
-    //float3 normal = normalize(input.normalWorld);
-    float3 normal = normalize(normalSample.xyz);
+    
+    float3x3 TBN = float3x3(input.tangent, input.binormal, input.normal);
+    float3 normal = normalSample.xyz * float3(2.f, 2.f, 2.f) - float3(1.f, 1.f, 1.f);
+    
+    normal = normalize(mul(TBN, normal));
+    
     float3 halfway = normalize(viewDirection + lightDirection);
     
     float3 diffuseColor = lerp(baseColor.rgb, 0.f, metalness);
@@ -230,7 +243,11 @@ PixelOutput normalDebugPS(VertexOutput input)
     PixelOutput result;
     
     float4 normalSample = normalTex.Sample(normalSampler, input.uv);
+    
+    float3x3 TBN = float3x3(input.tangent, input.binormal, input.normal);
     float3 normal = normalSample.xyz * float3(2.f, 2.f, 2.f) - float3(1.f, 1.f, 1.f);
+    
+    normal = normalize(mul(TBN, normal));
     
     result.color = float4(normal.x, normal.y, normal.z, 1.f);
     return result;

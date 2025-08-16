@@ -74,11 +74,12 @@ struct Vertex
 {
     glm::vec3 position;
     glm::vec3 normal;
+    glm::vec4 tangent;
     glm::vec2 uv;
     glm::vec4 color;
 
     static VkVertexInputBindingDescription getInputBindingDescription();
-    static std::array<VkVertexInputAttributeDescription, 4> getInputAttributeDescription();
+    static std::array<VkVertexInputAttributeDescription, 5> getInputAttributeDescription();
 };
 
 struct MeshPrimitive
