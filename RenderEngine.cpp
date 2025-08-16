@@ -479,7 +479,7 @@ void RenderEngine::initDescriptorPool()
     VK_Check(vkCreateDescriptorSetLayout(device->device, &layoutInfo, nullptr, &globalSceneDataLayout));
 
     // make material layout
-    std::array<VkDescriptorSetLayoutBinding, 2> materialBindings;
+    std::array<VkDescriptorSetLayoutBinding, 3> materialBindings;
     
     // base color
     materialBindings[0] = VkDescriptorSetLayoutBinding{
@@ -493,6 +493,15 @@ void RenderEngine::initDescriptorPool()
     // metallic + roughness
     materialBindings[1] = VkDescriptorSetLayoutBinding{
         .binding = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = nullptr
+    };
+
+    // normal
+    materialBindings[2] = VkDescriptorSetLayoutBinding{
+        .binding = 2,
         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
         .descriptorCount = 1,
         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,

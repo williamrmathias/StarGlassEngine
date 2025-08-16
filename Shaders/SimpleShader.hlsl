@@ -30,6 +30,12 @@ Texture2D metalRoughTex;
 [[vk::binding(1, 1)]]
 SamplerState metalRoughSampler;
 
+[[vk::binding(2, 1)]]
+Texture2D normalTex;
+
+[[vk::binding(2, 1)]]
+SamplerState normalSampler;
+
 struct MaterialConstants
 {
     float4 baseColorFactor;
@@ -154,6 +160,7 @@ PixelOutput simplePS(VertexOutput input)
     
     float4 baseColorSample = baseColorTex.Sample(baseColorSampler, input.uv);
     float4 metalRoughSample = metalRoughTex.Sample(metalRoughSampler, input.uv);
+    float4 normalSample = normalTex.Sample(normalSampler, input.uv);
     
     float4 baseColor = baseColorSample * pushConstants.material.baseColorFactor * input.color;
     
@@ -162,7 +169,8 @@ PixelOutput simplePS(VertexOutput input)
     
     float3 viewDirection = normalize(globalSceneData.viewPosition - input.positionWorld);
     float3 lightDirection = normalize(globalSceneData.lightDirection);
-    float3 normal = normalize(input.normalWorld);
+    //float3 normal = normalize(input.normalWorld);
+    float3 normal = normalize(normalSample.xyz);
     float3 halfway = normalize(viewDirection + lightDirection);
     
     float3 diffuseColor = lerp(baseColor.rgb, 0.f, metalness);

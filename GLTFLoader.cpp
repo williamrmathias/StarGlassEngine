@@ -500,6 +500,8 @@ void LoadedGltf::loadTextures(std::span<cgltf_texture> gltfTextures)
 
 static AssetId getMaterialId(const cgltf_material& material)
 {
+    AssetId materialId = invalidAssetId;
+
     if (material.has_pbr_metallic_roughness)
     {
         const cgltf_pbr_metallic_roughness& pbr = material.pbr_metallic_roughness;
@@ -512,6 +514,7 @@ static AssetId getMaterialId(const cgltf_material& material)
         };
 
         uint64_t constantHash = util::fastHash(constantData, 6 * sizeof(constantData[0]));
+        util::hashCombine(materialId, constantHash);
 
         // get texture asset ids
 
@@ -530,15 +533,22 @@ static AssetId getMaterialId(const cgltf_material& material)
             metalRoughId = getTextureId(metalRoughTex);
         }
 
-        AssetId materialId = constantHash;
         util::hashCombine(materialId, baseColorId);
         util::hashCombine(materialId, metalRoughId);
         return materialId;
     }
 
+    if (material.normal_texture.texture)
+    {
+        cgltf_texture& normalTex = *material.normal_texture.texture;
+        AssetId normalId = getTextureId(normalTex);
+
+        util::hashCombine(materialId, normalId);
+    }
+
     // TODO: Other material properties (alpha, double sided etc)
     // TODO: Other material types
-    return invalidAssetId;
+    return materialId;
 }
 
 void LoadedGltf::setMaterialDescriptor(Material& material)
@@ -556,6 +566,7 @@ void LoadedGltf::setMaterialDescriptor(Material& material)
 
     Texture& baseColorTex = textures[material.baseColorTex];
     Texture& metalRoughTex = textures[material.metalRoughTex];
+    Texture& normalTex = textures[material.normalTex];
 
     // write to descriptor set
     VkDescriptorImageInfo baseColorInfo{
@@ -570,7 +581,13 @@ void LoadedGltf::setMaterialDescriptor(Material& material)
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     };
 
-    std::array<VkWriteDescriptorSet, 2> writeSets;
+    VkDescriptorImageInfo normalInfo{
+        .sampler = samplers[normalTex.sampler],
+        .imageView = normalTex.view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    };
+
+    std::array<VkWriteDescriptorSet, 3> writeSets;
 
     writeSets[0] = VkWriteDescriptorSet{
         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -598,6 +615,19 @@ void LoadedGltf::setMaterialDescriptor(Material& material)
         .pTexelBufferView = nullptr
     };
 
+    writeSets[2] = VkWriteDescriptorSet{
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .pNext = nullptr,
+        .dstSet = material.descriptorSet,
+        .dstBinding = 2,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .pImageInfo = &normalInfo,
+        .pBufferInfo = nullptr,
+        .pTexelBufferView = nullptr
+    };
+
     vkUpdateDescriptorSets(
         engine->device->device,
         static_cast<uint32_t>(writeSets.size()), writeSets.data(),
@@ -615,6 +645,7 @@ Material Material::initMaterial()
 
     newMaterial.baseColorTex = defaultHandle;
     newMaterial.metalRoughTex = defaultHandle;
+    newMaterial.normalTex = defaultHandle;
 
     return newMaterial;
 }
@@ -648,6 +679,12 @@ void LoadedGltf::loadMaterials(std::span<cgltf_material> gltfMaterials)
                     *material.pbr_metallic_roughness.metallic_roughness_texture.texture;
                 newMaterial.metalRoughTex = textureMap[getTextureId(metalRoughTex)];
             }
+        }
+
+        if (material.normal_texture.texture)
+        {
+            cgltf_texture& normalTex = *material.normal_texture.texture;
+            newMaterial.normalTex = textureMap[getTextureId(normalTex)];
         }
 
         // TODO: Other material properties (alpha, double sided etc)

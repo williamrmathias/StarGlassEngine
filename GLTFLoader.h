@@ -63,6 +63,7 @@ struct Material
 
     TextureHandle baseColorTex;
     TextureHandle metalRoughTex;
+    TextureHandle normalTex;
 
     VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
 
