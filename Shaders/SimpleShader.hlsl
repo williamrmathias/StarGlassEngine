@@ -222,3 +222,16 @@ PixelOutput roughDebugPS(VertexOutput input)
     result.color = float4(roughFactor, roughFactor, roughFactor, 1.f);
     return result;
 }
+
+// This shader displays the normal of the draw
+// used for debugging
+PixelOutput normalDebugPS(VertexOutput input)
+{
+    PixelOutput result;
+    
+    float4 normalSample = normalTex.Sample(normalSampler, input.uv);
+    float3 normal = normalSample.xyz * float3(2.f, 2.f, 2.f) - float3(1.f, 1.f, 1.f);
+    
+    result.color = float4(normal.x, normal.y, normal.z, 1.f);
+    return result;
+}

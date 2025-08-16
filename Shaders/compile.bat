@@ -4,3 +4,4 @@ dxc.exe -T ps_6_0 -E simplePS -spirv -Fo SimpleShader_simplePS.spirv SimpleShade
 dxc.exe -T ps_6_0 -E baseColorDebugPS -spirv -Fo baseColorDebugPS.spirv SimpleShader.hlsl > baseColorDebugPS.log 2>&1
 dxc.exe -T ps_6_0 -E metalDebugPS -spirv -Fo metalDebugPS.spirv SimpleShader.hlsl > metalDebugPS.log 2>&1
 dxc.exe -T ps_6_0 -E roughDebugPS -spirv -Fo roughDebugPS.spirv SimpleShader.hlsl > roughDebugPS.log 2>&1
+dxc.exe -T ps_6_0 -E normalDebugPS -spirv -Fo normalDebugPS.spirv SimpleShader.hlsl > normalDebugPS.log 2>&1

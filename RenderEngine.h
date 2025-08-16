@@ -114,6 +114,7 @@ public:
         BaseColorDebug,
         MetalDebug,
         RoughDebug,
+        NormalDebug,
         NumPipelineTypes
     };
 
@@ -125,6 +126,7 @@ public:
     Pipeline baseColorPipeline;
     Pipeline metalPipeline;
     Pipeline roughPipeline;
+    Pipeline normalPipeline;
 
     void init(SDL_Window* window);
     void render();

@@ -302,6 +302,7 @@ void RenderEngine::cleanup()
         baseColorPipeline.cleanup(device.get());
         metalPipeline.cleanup(device.get());
         roughPipeline.cleanup(device.get());
+        normalPipeline.cleanup(device.get());
     }
 
     destroyAllocatedImage(device.get(), colorImage);
@@ -405,6 +406,9 @@ void RenderEngine::setActiveDrawPipeline(PipelineType pipeline)
         break;
     case gfx::RenderEngine::PipelineType::RoughDebug:
         activePipeline = roughPipeline;
+        break;
+    case gfx::RenderEngine::PipelineType::NormalDebug:
+        activePipeline = normalPipeline;
         break;
     default:
         break;
@@ -727,9 +731,16 @@ void RenderEngine::initGraphicsPipelines()
         pipelineBuilder.setShaderStages(vertShader, "simpleVS", roughFragShader, "roughDebugPS");
         roughPipeline = pipelineBuilder.build(device.get());
 
+        // normal
+        std::filesystem::path normalFragShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/normalDebugPS.spirv");
+        VkShaderModule normalFragShader = loadShaderModule(normalFragShaderPath.string().c_str());
+        pipelineBuilder.setShaderStages(vertShader, "simpleVS", normalFragShader, "normalDebugPS");
+        normalPipeline = pipelineBuilder.build(device.get());
+
         vkDestroyShaderModule(device->device, baseColorFragShader, nullptr);
         vkDestroyShaderModule(device->device, metalFragShader, nullptr);
         vkDestroyShaderModule(device->device, roughFragShader, nullptr);
+        vkDestroyShaderModule(device->device, normalFragShader, nullptr);
     }
 
     activePipeline = graphicsPipeline;
