@@ -84,9 +84,9 @@ VertexOutput simpleVS(VertexInput input)
     output.position = mul(mvp, float4(input.position, 1.f));
     output.positionWorld = mul(pushConstants.model, float4(input.position, 1.f)).xyz;
     
-    float3 N = mul(pushConstants.model, float4(input.normal, 0.f)).xyz;
-    float3 T = mul(pushConstants.model, float4(input.tangent.xyz, 0.f)).xyz;
-    float3 B = cross(N, T) * input.tangent.w;
+    float3 N = normalize(mul(pushConstants.model, float4(input.normal, 0.f)).xyz);
+    float3 T = normalize(mul(pushConstants.model, float4(input.tangent.xyz, 0.f)).xyz);
+    float3 B = normalize(cross(N, T)) * input.tangent.w;
     
     output.tangent = T;
     output.normal = N;
@@ -142,6 +142,7 @@ float3 specularBRDF(
     float NdotL = clamp(dot(normal, lightDir), 0.f, 1.f);
     float NdotH = clamp(dot(normal, halfway), 0.f, 1.f);
     float LdotH = clamp(dot(lightDir, halfway), 0.f, 1.f);
+    float VdotH = clamp(dot(viewDir, halfway), 0.f, 1.f);
     
     // input roughness param is a perceptual roughness
     // alpha is a more physically accurate value
@@ -152,7 +153,7 @@ float3 specularBRDF(
     
     float reflectance = 0.5f;
     float3 f0 = 0.16f * reflectance * reflectance * (1.f - metalness) + baseColor * metalness;
-    float3 F = F_Schlick(LdotH, f0);
+    float3 F = F_Schlick(VdotH, f0);
     
     return (D * V) * F;
 }
