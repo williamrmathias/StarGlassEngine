@@ -302,6 +302,7 @@ void RenderEngine::cleanup()
         baseColorPipeline.cleanup(device.get());
         metalPipeline.cleanup(device.get());
         roughPipeline.cleanup(device.get());
+        normalPipeline.cleanup(device.get());
     }
 
     destroyAllocatedImage(device.get(), colorImage);
@@ -406,6 +407,9 @@ void RenderEngine::setActiveDrawPipeline(PipelineType pipeline)
     case gfx::RenderEngine::PipelineType::RoughDebug:
         activePipeline = roughPipeline;
         break;
+    case gfx::RenderEngine::PipelineType::NormalDebug:
+        activePipeline = normalPipeline;
+        break;
     default:
         break;
     }
@@ -479,7 +483,7 @@ void RenderEngine::initDescriptorPool()
     VK_Check(vkCreateDescriptorSetLayout(device->device, &layoutInfo, nullptr, &globalSceneDataLayout));
 
     // make material layout
-    std::array<VkDescriptorSetLayoutBinding, 2> materialBindings;
+    std::array<VkDescriptorSetLayoutBinding, 3> materialBindings;
     
     // base color
     materialBindings[0] = VkDescriptorSetLayoutBinding{
@@ -493,6 +497,15 @@ void RenderEngine::initDescriptorPool()
     // metallic + roughness
     materialBindings[1] = VkDescriptorSetLayoutBinding{
         .binding = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = nullptr
+    };
+
+    // normal
+    materialBindings[2] = VkDescriptorSetLayoutBinding{
+        .binding = 2,
         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
         .descriptorCount = 1,
         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -680,7 +693,7 @@ void RenderEngine::initGraphicsPipelines()
 
         // IA info
         VkVertexInputBindingDescription vertexBindingDesc = Vertex::getInputBindingDescription();
-        std::array<VkVertexInputAttributeDescription, 4> vertexAttribDesc = Vertex::getInputAttributeDescription();
+        std::array<VkVertexInputAttributeDescription, 5> vertexAttribDesc = Vertex::getInputAttributeDescription();
         pipelineBuilder.setVertexInputState(std::span{ &vertexBindingDesc, 1 }, vertexAttribDesc);
         pipelineBuilder.setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
 
@@ -718,9 +731,16 @@ void RenderEngine::initGraphicsPipelines()
         pipelineBuilder.setShaderStages(vertShader, "simpleVS", roughFragShader, "roughDebugPS");
         roughPipeline = pipelineBuilder.build(device.get());
 
+        // normal
+        std::filesystem::path normalFragShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/normalDebugPS.spirv");
+        VkShaderModule normalFragShader = loadShaderModule(normalFragShaderPath.string().c_str());
+        pipelineBuilder.setShaderStages(vertShader, "simpleVS", normalFragShader, "normalDebugPS");
+        normalPipeline = pipelineBuilder.build(device.get());
+
         vkDestroyShaderModule(device->device, baseColorFragShader, nullptr);
         vkDestroyShaderModule(device->device, metalFragShader, nullptr);
         vkDestroyShaderModule(device->device, roughFragShader, nullptr);
+        vkDestroyShaderModule(device->device, normalFragShader, nullptr);
     }
 
     activePipeline = graphicsPipeline;

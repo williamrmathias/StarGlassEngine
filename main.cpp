@@ -95,6 +95,8 @@ int main()
                     pipeline = PipelineType::MetalDebug;
                 if (ImGui::Selectable("RoughDebug", pipeline == PipelineType::RoughDebug))
                     pipeline = PipelineType::RoughDebug;
+                if (ImGui::Selectable("NormalDebug", pipeline == PipelineType::NormalDebug))
+                    pipeline = PipelineType::NormalDebug;
 
                 renderEngine.setActiveDrawPipeline(pipeline);
             }

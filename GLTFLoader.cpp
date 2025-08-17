@@ -34,9 +34,9 @@ VkVertexInputBindingDescription Vertex::getInputBindingDescription()
     return bindingDesc;
 }
 
-std::array<VkVertexInputAttributeDescription, 4> Vertex::getInputAttributeDescription()
+std::array<VkVertexInputAttributeDescription, 5> Vertex::getInputAttributeDescription()
 {
-    std::array<VkVertexInputAttributeDescription, 4> attribDesc;
+    std::array<VkVertexInputAttributeDescription, 5> attribDesc;
 
     // position attrib
     attribDesc[0].location = 0;
@@ -50,17 +50,23 @@ std::array<VkVertexInputAttributeDescription, 4> Vertex::getInputAttributeDescri
     attribDesc[1].format = VK_FORMAT_R32G32B32_SFLOAT;
     attribDesc[1].offset = offsetof(Vertex, normal);
 
-    // uv attrib
+    // tangent attrib
     attribDesc[2].location = 2;
     attribDesc[2].binding = 0;
-    attribDesc[2].format = VK_FORMAT_R32G32_SFLOAT;
-    attribDesc[2].offset = offsetof(Vertex, uv);
+    attribDesc[2].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attribDesc[2].offset = offsetof(Vertex, tangent);
 
-    // color attrib
+    // uv attrib
     attribDesc[3].location = 3;
     attribDesc[3].binding = 0;
-    attribDesc[3].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    attribDesc[3].offset = offsetof(Vertex, color);
+    attribDesc[3].format = VK_FORMAT_R32G32_SFLOAT;
+    attribDesc[3].offset = offsetof(Vertex, uv);
+
+    // color attrib
+    attribDesc[4].location = 4;
+    attribDesc[4].binding = 0;
+    attribDesc[4].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attribDesc[4].offset = offsetof(Vertex, color);
 
     return attribDesc;
 }
@@ -500,6 +506,8 @@ void LoadedGltf::loadTextures(std::span<cgltf_texture> gltfTextures)
 
 static AssetId getMaterialId(const cgltf_material& material)
 {
+    AssetId materialId = invalidAssetId;
+
     if (material.has_pbr_metallic_roughness)
     {
         const cgltf_pbr_metallic_roughness& pbr = material.pbr_metallic_roughness;
@@ -512,6 +520,7 @@ static AssetId getMaterialId(const cgltf_material& material)
         };
 
         uint64_t constantHash = util::fastHash(constantData, 6 * sizeof(constantData[0]));
+        util::hashCombine(materialId, constantHash);
 
         // get texture asset ids
 
@@ -530,15 +539,22 @@ static AssetId getMaterialId(const cgltf_material& material)
             metalRoughId = getTextureId(metalRoughTex);
         }
 
-        AssetId materialId = constantHash;
         util::hashCombine(materialId, baseColorId);
         util::hashCombine(materialId, metalRoughId);
         return materialId;
     }
 
+    if (material.normal_texture.texture)
+    {
+        cgltf_texture& normalTex = *material.normal_texture.texture;
+        AssetId normalId = getTextureId(normalTex);
+
+        util::hashCombine(materialId, normalId);
+    }
+
     // TODO: Other material properties (alpha, double sided etc)
     // TODO: Other material types
-    return invalidAssetId;
+    return materialId;
 }
 
 void LoadedGltf::setMaterialDescriptor(Material& material)
@@ -556,6 +572,7 @@ void LoadedGltf::setMaterialDescriptor(Material& material)
 
     Texture& baseColorTex = textures[material.baseColorTex];
     Texture& metalRoughTex = textures[material.metalRoughTex];
+    Texture& normalTex = textures[material.normalTex];
 
     // write to descriptor set
     VkDescriptorImageInfo baseColorInfo{
@@ -570,7 +587,13 @@ void LoadedGltf::setMaterialDescriptor(Material& material)
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     };
 
-    std::array<VkWriteDescriptorSet, 2> writeSets;
+    VkDescriptorImageInfo normalInfo{
+        .sampler = samplers[normalTex.sampler],
+        .imageView = normalTex.view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    };
+
+    std::array<VkWriteDescriptorSet, 3> writeSets;
 
     writeSets[0] = VkWriteDescriptorSet{
         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -598,6 +621,19 @@ void LoadedGltf::setMaterialDescriptor(Material& material)
         .pTexelBufferView = nullptr
     };
 
+    writeSets[2] = VkWriteDescriptorSet{
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .pNext = nullptr,
+        .dstSet = material.descriptorSet,
+        .dstBinding = 2,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .pImageInfo = &normalInfo,
+        .pBufferInfo = nullptr,
+        .pTexelBufferView = nullptr
+    };
+
     vkUpdateDescriptorSets(
         engine->device->device,
         static_cast<uint32_t>(writeSets.size()), writeSets.data(),
@@ -615,6 +651,7 @@ Material Material::initMaterial()
 
     newMaterial.baseColorTex = defaultHandle;
     newMaterial.metalRoughTex = defaultHandle;
+    newMaterial.normalTex = defaultHandle;
 
     return newMaterial;
 }
@@ -648,6 +685,12 @@ void LoadedGltf::loadMaterials(std::span<cgltf_material> gltfMaterials)
                     *material.pbr_metallic_roughness.metallic_roughness_texture.texture;
                 newMaterial.metalRoughTex = textureMap[getTextureId(metalRoughTex)];
             }
+        }
+
+        if (material.normal_texture.texture)
+        {
+            cgltf_texture& normalTex = *material.normal_texture.texture;
+            newMaterial.normalTex = textureMap[getTextureId(normalTex)];
         }
 
         // TODO: Other material properties (alpha, double sided etc)
@@ -739,6 +782,7 @@ LoadedGltf::BufferDesc LoadedGltf::loadVertexBuffer(const cgltf_primitive& primi
 
     std::vector<float> positionData;
     std::vector<float> normalData;
+    std::vector<float> tangentData;
     std::vector<float> uvData;
     std::vector<float> colorData;
 
@@ -772,6 +816,22 @@ LoadedGltf::BufferDesc LoadedGltf::loadVertexBuffer(const cgltf_primitive& primi
             cgltf_size normalCount = cgltf_accessor_unpack_floats(normalAcc, nullptr, 0);
             normalData.resize(normalCount);
             cgltf_accessor_unpack_floats(normalAcc, normalData.data(), normalCount);
+        }
+    }
+
+    // tangent
+    bool hasTangent = false;
+    {
+        const cgltf_accessor* tangentAcc = cgltf_find_accessor(
+            &primitive, cgltf_attribute_type_tangent, 0
+        );
+
+        if (tangentAcc != nullptr)
+        {
+            hasTangent = true;
+            cgltf_size tangentCount = cgltf_accessor_unpack_floats(tangentAcc, nullptr, 0);
+            tangentData.resize(tangentCount);
+            cgltf_accessor_unpack_floats(tangentAcc, tangentData.data(), tangentCount);
         }
     }
 
@@ -819,6 +879,11 @@ LoadedGltf::BufferDesc LoadedGltf::loadVertexBuffer(const cgltf_primitive& primi
                 vertexData[i].normal = glm::make_vec3(&normalData[3 * i]);
             else
                 vertexData[i].normal = glm::vec3{ 0.f, 0.f, 1.f };
+
+            if (hasTangent)
+                vertexData[i].tangent = glm::make_vec4(&tangentData[4 * i]);
+            else
+                vertexData[i].tangent = glm::vec4{ 0.f, 0.f, 0.f, 1.f };
 
             if (hasUv)
                 vertexData[i].uv = glm::make_vec2(&uvData[2 * i]);

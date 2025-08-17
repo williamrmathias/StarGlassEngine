@@ -30,6 +30,12 @@ Texture2D metalRoughTex;
 [[vk::binding(1, 1)]]
 SamplerState metalRoughSampler;
 
+[[vk::binding(2, 1)]]
+Texture2D normalTex;
+
+[[vk::binding(2, 1)]]
+SamplerState normalSampler;
+
 struct MaterialConstants
 {
     float4 baseColorFactor;
@@ -50,16 +56,19 @@ struct VertexInput
 {
     [[vk::location(0)]] float3 position : POSITION0;
     [[vk::location(1)]] float3 normal : NORMAL0;
-    [[vk::location(2)]] float2 uv : TEXCOORD0;
-    [[vk::location(3)]] float4 color : COLOR0;
+    [[vk::location(2)]] float4 tangent : TANGENT0;
+    [[vk::location(3)]] float2 uv : TEXCOORD0;
+    [[vk::location(4)]] float4 color : COLOR0;
 };
 
 struct VertexOutput
 {
     float4 position : SV_Position;
     float3 positionWorld : TEXCOORD0;
-    float3 normalWorld : NORMAL0;
-    float2 uv : TEXCOORD1;
+    float3 tangent : TEXCOORD1;
+    float3 normal : TEXCOORD2;
+    float3 binormal : TEXCOORD3;
+    float2 uv : TEXCOORD4;
     float4 color : COLOR0;
 };
 
@@ -75,7 +84,13 @@ VertexOutput simpleVS(VertexInput input)
     output.position = mul(mvp, float4(input.position, 1.f));
     output.positionWorld = mul(pushConstants.model, float4(input.position, 1.f)).xyz;
     
-    output.normalWorld = mul(pushConstants.model, float4(input.normal, 0.f)).xyz;
+    float3 N = normalize(mul(pushConstants.model, float4(input.normal, 0.f)).xyz);
+    float3 T = normalize(mul(pushConstants.model, float4(input.tangent.xyz, 0.f)).xyz);
+    float3 B = normalize(cross(N, T)) * input.tangent.w;
+    
+    output.tangent = T;
+    output.normal = N;
+    output.binormal = B;
     output.uv = input.uv;
     output.color = input.color;
     return output;
@@ -127,6 +142,7 @@ float3 specularBRDF(
     float NdotL = clamp(dot(normal, lightDir), 0.f, 1.f);
     float NdotH = clamp(dot(normal, halfway), 0.f, 1.f);
     float LdotH = clamp(dot(lightDir, halfway), 0.f, 1.f);
+    float VdotH = clamp(dot(viewDir, halfway), 0.f, 1.f);
     
     // input roughness param is a perceptual roughness
     // alpha is a more physically accurate value
@@ -137,7 +153,7 @@ float3 specularBRDF(
     
     float reflectance = 0.5f;
     float3 f0 = 0.16f * reflectance * reflectance * (1.f - metalness) + baseColor * metalness;
-    float3 F = F_Schlick(LdotH, f0);
+    float3 F = F_Schlick(VdotH, f0);
     
     return (D * V) * F;
 }
@@ -154,6 +170,7 @@ PixelOutput simplePS(VertexOutput input)
     
     float4 baseColorSample = baseColorTex.Sample(baseColorSampler, input.uv);
     float4 metalRoughSample = metalRoughTex.Sample(metalRoughSampler, input.uv);
+    float4 normalSample = normalTex.Sample(normalSampler, input.uv);
     
     float4 baseColor = baseColorSample * pushConstants.material.baseColorFactor * input.color;
     
@@ -162,7 +179,12 @@ PixelOutput simplePS(VertexOutput input)
     
     float3 viewDirection = normalize(globalSceneData.viewPosition - input.positionWorld);
     float3 lightDirection = normalize(globalSceneData.lightDirection);
-    float3 normal = normalize(input.normalWorld);
+    
+    float3x3 TBN = float3x3(input.tangent, input.binormal, input.normal);
+    float3 normal = normalSample.xyz * float3(2.f, 2.f, 2.f) - float3(1.f, 1.f, 1.f);
+    
+    normal = normalize(mul(TBN, normal));
+    
     float3 halfway = normalize(viewDirection + lightDirection);
     
     float3 diffuseColor = lerp(baseColor.rgb, 0.f, metalness);
@@ -212,5 +234,22 @@ PixelOutput roughDebugPS(VertexOutput input)
     float roughFactor = metalRoughSample.g * pushConstants.material.roughnessFactor;
     
     result.color = float4(roughFactor, roughFactor, roughFactor, 1.f);
+    return result;
+}
+
+// This shader displays the normal of the draw
+// used for debugging
+PixelOutput normalDebugPS(VertexOutput input)
+{
+    PixelOutput result;
+    
+    float4 normalSample = normalTex.Sample(normalSampler, input.uv);
+    
+    float3x3 TBN = float3x3(input.tangent, input.binormal, input.normal);
+    float3 normal = normalSample.xyz * float3(2.f, 2.f, 2.f) - float3(1.f, 1.f, 1.f);
+    
+    normal = normalize(mul(TBN, normal));
+    
+    result.color = float4(normal.x, normal.y, normal.z, 1.f);
     return result;
 }
