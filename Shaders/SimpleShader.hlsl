@@ -114,8 +114,8 @@ float D_GGX(float NdotH, float alpha)
 float V_SmithGGXCorrelated(float NdotV, float NdotL, float alpha)
 {
     float alpha2 = alpha * alpha;
-    float GGXL = NdotV * sqrt((-NdotL * alpha2 + NdotL) * NdotL + alpha2);
-    float GGXV = NdotL * sqrt((-NdotV * alpha2 + NdotV) * NdotV + alpha2);
+    float GGXV = NdotL * sqrt((NdotV - alpha2 * NdotV) * NdotV + alpha2);
+    float GGXL = NdotV * sqrt((NdotL - alpha2 * NdotL) * NdotL + alpha2);
     return 0.5f / (GGXV + GGXL);
 }
 
@@ -139,10 +139,9 @@ float3 specularBRDF(
 )
 {
     float NdotV = abs(dot(normal, viewDir)) + EPSILON;
-    float NdotL = clamp(dot(normal, lightDir), 0.f, 1.f);
-    float NdotH = clamp(dot(normal, halfway), 0.f, 1.f);
-    float LdotH = clamp(dot(lightDir, halfway), 0.f, 1.f);
-    float VdotH = clamp(dot(viewDir, halfway), 0.f, 1.f);
+    float NdotL = abs(dot(normal, lightDir)) + EPSILON;
+    float NdotH = abs(dot(normal, halfway)) + EPSILON;
+    float LdotH = abs(dot(lightDir, halfway)) + EPSILON;
     
     // input roughness param is a perceptual roughness
     // alpha is a more physically accurate value
@@ -153,7 +152,7 @@ float3 specularBRDF(
     
     float reflectance = 0.5f;
     float3 f0 = 0.16f * reflectance * reflectance * (1.f - metalness) + baseColor * metalness;
-    float3 F = F_Schlick(VdotH, f0);
+    float3 F = F_Schlick(LdotH, f0);
     
     return (D * V) * F;
 }
