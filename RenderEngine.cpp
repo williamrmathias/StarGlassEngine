@@ -12,6 +12,7 @@
 
 // glm
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtc/matrix_access.hpp>
 
 // stl
 #include <algorithm>
@@ -796,18 +797,85 @@ void RenderEngine::initScene()
     setSunDirection(0.f, 0.f);
 
     // load gltf
-    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/Sponza/Sponza.gltf");
+    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/Bistro.glb");
     loadedGltf = std::make_unique<LoadedGltf>(this, gltfPath.string().c_str());
+}
+
+struct Frustum
+{
+    std::array<glm::vec4, 6> planes;
+};
+
+//https://www.gamedevs.org/uploads/fast-extraction-viewing-frustum-planes-from-world-view-projection-matrix.pdf
+static Frustum extractViewFrustum(const glm::mat4& viewproj)
+{
+    Frustum result{};
+
+    // left plane
+    result.planes[0] = glm::row(viewproj, 3) + glm::row(viewproj, 0);
+
+    // right plane
+    result.planes[1] = glm::row(viewproj, 3) - glm::row(viewproj, 0);
+
+    // bottom plane
+    result.planes[2] = glm::row(viewproj, 3) + glm::row(viewproj, 1);
+
+    // top plane
+    result.planes[3] = glm::row(viewproj, 3) - glm::row(viewproj, 1);
+
+    // near plane
+    result.planes[4] = glm::row(viewproj, 2);
+
+    // far plane
+    result.planes[5] = glm::row(viewproj, 3) - glm::row(viewproj, 2);
+
+    return result;
+}
+
+// a primitive is not visible if all 8 of its corners are outside one of the planes 
+static bool isVisible(const MeshPrimitive& primitive, const glm::mat4& modelMatrix, const Frustum& viewFrustum)
+{
+    Extent worldBoundingBox{
+        .max = glm::mat3(modelMatrix) * primitive.boundingBox.max,
+        .min = glm::mat3(modelMatrix) * primitive.boundingBox.min
+    };
+
+    std::array<glm::vec3, 8> corners = worldBoundingBox.getCorners();
+
+    for (glm::vec4 plane : viewFrustum.planes)
+    {
+        if (glm::dot(corners[0], glm::vec3(plane)) + plane.w > 0.f) continue;
+        if (glm::dot(corners[1], glm::vec3(plane)) + plane.w > 0.f) continue;
+        if (glm::dot(corners[2], glm::vec3(plane)) + plane.w > 0.f) continue;
+        if (glm::dot(corners[3], glm::vec3(plane)) + plane.w > 0.f) continue;
+        if (glm::dot(corners[4], glm::vec3(plane)) + plane.w > 0.f) continue;
+        if (glm::dot(corners[5], glm::vec3(plane)) + plane.w > 0.f) continue;
+        if (glm::dot(corners[6], glm::vec3(plane)) + plane.w > 0.f) continue;
+        if (glm::dot(corners[7], glm::vec3(plane)) + plane.w > 0.f) continue;
+
+        // if none of the corners are inside this plane, this object is not visible
+        return false;
+    }
+
+    return true;
 }
 
 void RenderEngine::drawScene(VkCommandBuffer cmd)
 {
+    Frustum viewFrusum = extractViewFrustum(globalSceneData.viewproj);
+
     for (const MeshNode& meshNode : loadedGltf->scene.nodes)
     {
         const Mesh& mesh = loadedGltf->meshes[meshNode.mesh];
 
         for (const MeshPrimitive& primitive : mesh.primitives)
         {
+            // cull non visible primitives
+            if (!isVisible(primitive, meshNode.transform, viewFrusum))
+            {
+                continue;
+            }
+
             // bind geometry buffers
             gfx::AllocatedBuffer vertexBuffer = loadedGltf->buffers[primitive.vertexBuffer];
             VkDeviceSize vertexBufferOffset{ 0 };
