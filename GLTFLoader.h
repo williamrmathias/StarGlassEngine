@@ -13,6 +13,7 @@
 #include <span>
 #include <string>
 #include <filesystem>
+#include <limits>
 
 // cgltf
 #include <cgltf.h>
@@ -82,6 +83,29 @@ struct Vertex
     static std::array<VkVertexInputAttributeDescription, 5> getInputAttributeDescription();
 };
 
+namespace Vec3
+{
+constexpr glm::vec3 infinity = glm::vec3{ 
+    std::numeric_limits<float>::infinity(),
+    std::numeric_limits<float>::infinity(),
+    std::numeric_limits<float>::infinity() 
+};
+
+constexpr glm::vec3 minusInfinity = glm::vec3{
+    -std::numeric_limits<float>::infinity(),
+    -std::numeric_limits<float>::infinity(),
+    -std::numeric_limits<float>::infinity()
+};
+}
+
+struct Extent
+{
+    glm::vec3 max = Vec3::minusInfinity;
+    glm::vec3 min = Vec3::infinity;
+
+    std::array<glm::vec3, 8> getCorners() const;
+};
+
 struct MeshPrimitive
 {
     BufferHandle vertexBuffer;
@@ -94,6 +118,8 @@ struct MeshPrimitive
     VkIndexType indexType;
 
     MaterialHandle material;
+
+    Extent boundingBox;
 
     uint64_t getHash() const;
 };
@@ -157,15 +183,24 @@ private:
     void setMaterialDescriptor(Material& material);
     void loadMaterials(std::span<cgltf_material> gltfMaterials);
 
-    struct BufferDesc
+    struct IndexBufferDesc
     {
         BufferHandle handle;
-        size_t numElements;
-        size_t elementSize;
+        size_t numIndices;
+        size_t indexWidth;
     };
 
-    BufferDesc loadIndexBuffer(cgltf_accessor& accessor);
-    BufferDesc loadVertexBuffer(const cgltf_primitive& primitive);
+    IndexBufferDesc loadIndexBuffer(cgltf_accessor& accessor);
+
+    struct VertexBufferDesc
+    {
+        BufferHandle handle;
+        size_t numVertices;
+        glm::vec3 maxPosition;
+        glm::vec3 minPosition;
+    };
+
+    VertexBufferDesc loadVertexBuffer(const cgltf_primitive& primitive);
     MeshPrimitive createMeshPrimitive(const cgltf_primitive& primitive);
     void loadMeshes(std::span<cgltf_mesh> gltfMeshes);
 

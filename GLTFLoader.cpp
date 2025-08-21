@@ -712,7 +712,7 @@ static AssetId getBufferId(const void* data, size_t dataSize)
     return util::fastHash(data, dataSize);
 }
 
-LoadedGltf::BufferDesc LoadedGltf::loadIndexBuffer(cgltf_accessor& accessor)
+LoadedGltf::IndexBufferDesc LoadedGltf::loadIndexBuffer(cgltf_accessor& accessor)
 {
     std::vector<uint8_t> indexData;
 
@@ -773,10 +773,10 @@ LoadedGltf::BufferDesc LoadedGltf::loadIndexBuffer(cgltf_accessor& accessor)
     bufferMap[indexBufferId] = handle;
     buffers.push_back(newBuffer);
 
-    return { handle, indexCount };
+    return { handle, indexCount, outComponentSize };
 }
 
-LoadedGltf::BufferDesc LoadedGltf::loadVertexBuffer(const cgltf_primitive& primitive)
+LoadedGltf::VertexBufferDesc LoadedGltf::loadVertexBuffer(const cgltf_primitive& primitive)
 {
     std::vector<Vertex> vertexData;
 
@@ -785,6 +785,9 @@ LoadedGltf::BufferDesc LoadedGltf::loadVertexBuffer(const cgltf_primitive& primi
     std::vector<float> tangentData;
     std::vector<float> uvData;
     std::vector<float> colorData;
+
+    glm::vec3 maxPosition = Vec3::minusInfinity;
+    glm::vec3 minPosition = Vec3::infinity;
 
     // position
     {
@@ -795,12 +798,17 @@ LoadedGltf::BufferDesc LoadedGltf::loadVertexBuffer(const cgltf_primitive& primi
         if (positionAcc == nullptr)
         {
             SDL_LogError(0, "Mesh load error: Surface position attrib invalid");
-            return { invalidAssetId, 0 };
+            return { invalidAssetId, 0, maxPosition, minPosition};
         }
 
         cgltf_size positionCount = cgltf_accessor_unpack_floats(positionAcc, nullptr, 0);
         positionData.resize(positionCount);
         cgltf_accessor_unpack_floats(positionAcc, positionData.data(), positionCount);
+
+        if (positionAcc->has_max)
+            maxPosition = glm::max(maxPosition, glm::make_vec3(positionAcc->max));
+        if (positionAcc->has_min)
+            minPosition = glm::min(minPosition, glm::make_vec3(positionAcc->min));
     }
 
     // normal
@@ -906,7 +914,7 @@ LoadedGltf::BufferDesc LoadedGltf::loadVertexBuffer(const cgltf_primitive& primi
     if (entry != bufferMap.end())
     {
         // vertex buffer already exists; return it
-        return { entry->second, vertexCount };
+        return { entry->second, vertexCount, maxPosition, minPosition };
     }
 
     // else, create and upload the buffer
@@ -937,12 +945,26 @@ LoadedGltf::BufferDesc LoadedGltf::loadVertexBuffer(const cgltf_primitive& primi
     bufferMap[vertexBufferId] = handle;
     buffers.push_back(newBuffer);
 
-    return { handle, vertexCount };
+    return { handle, vertexCount, maxPosition, minPosition };
+}
+
+std::array<glm::vec3, 8> Extent::getCorners() const
+{
+    return {
+        glm::vec3(min.x, min.y, min.z),
+        glm::vec3(max.x, min.y, min.z),
+        glm::vec3(min.x, max.y, min.z),
+        glm::vec3(max.x, max.y, min.z),
+        glm::vec3(min.x, min.y, max.z),
+        glm::vec3(max.x, min.y, max.z),
+        glm::vec3(min.x, max.y, max.z),
+        glm::vec3(max.x, max.y, max.z)
+    };
 }
 
 uint64_t MeshPrimitive::getHash() const
 {
-    assert(sizeof(MeshPrimitive) == 40); // if size changes, check hash
+    assert(sizeof(MeshPrimitive) == 64); // if size changes, check hash
     return util::fastHash(this, sizeof(MeshPrimitive));
 }
 
@@ -967,12 +989,12 @@ MeshPrimitive LoadedGltf::createMeshPrimitive(const cgltf_primitive& primitive)
     if (primitive.indices)
     {
         // TODO: Support non index geometrys
-        BufferDesc indexDesc = loadIndexBuffer(*primitive.indices);
+        IndexBufferDesc indexDesc = loadIndexBuffer(*primitive.indices);
         newPrimitive.indexBuffer = indexDesc.handle;
-        newPrimitive.indexCount = static_cast<uint32_t>(indexDesc.numElements);
-        newPrimitive.indexType = indexDesc.elementSize == 4 ?
+        newPrimitive.indexCount = static_cast<uint32_t>(indexDesc.numIndices);
+        newPrimitive.indexType = indexDesc.indexWidth == 4 ?
             VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
-        }
+    }
     else
     {
         SDL_LogError(0, "Mesh load error: Mesh primitive is non indexed");
@@ -981,10 +1003,11 @@ MeshPrimitive LoadedGltf::createMeshPrimitive(const cgltf_primitive& primitive)
 
     // get vertex buffer
     {
-        BufferDesc vertexDesc = loadVertexBuffer(primitive);
+        VertexBufferDesc vertexDesc = loadVertexBuffer(primitive);
         newPrimitive.vertexBuffer = vertexDesc.handle;
-        newPrimitive.vertexCount = static_cast<uint32_t>(vertexDesc.numElements);
-        }
+        newPrimitive.vertexCount = static_cast<uint32_t>(vertexDesc.numVertices);
+        newPrimitive.boundingBox = Extent{ vertexDesc.maxPosition, vertexDesc.minPosition };
+    }
 
     // get material
     newPrimitive.material = defaultHandle;
