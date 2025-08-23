@@ -69,6 +69,12 @@ struct PushConstants
     float padding[10];
 };
 
+// must be 128 bytes
+struct ScreenSpacePushConstants
+{
+    float padding[32];
+};
+
 class RenderEngine
 {
 public:
@@ -80,15 +86,15 @@ public:
     VkCommandBuffer immediateCommandBuffer;
     VkFence immediateFence;
 
-    AllocatedImage colorImage;
-    VkImageView colorView;
-
     AllocatedImage depthImage;
     VkImageView depthView;
+
+    VkSampler screenSpaceSampler;
 
     VkDescriptorPool globalDescriptorPool;
     VkDescriptorSetLayout globalSceneDataLayout;
     VkDescriptorSetLayout materialLayout;
+    VkDescriptorSetLayout screenSpaceLayout;
 
     struct FrameData
     {
@@ -100,8 +106,11 @@ public:
         VkCommandBuffer commandBuffer;
 
         AllocatedBuffer uniformBuffer;
+        VkDescriptorSet globalDescriptorSet;
 
-        VkDescriptorSet descriptorSet;
+        AllocatedImage hdrColorImage;
+        VkImageView hdrColorView;
+        VkDescriptorSet screenSpaceDescriptorSet;
 
         void cleanup(Device* device);
     };
@@ -121,6 +130,7 @@ public:
     Pipeline activePipeline;
 
     Pipeline graphicsPipeline;
+    Pipeline screenSpacePipeline;
 
     // debug pipelines
     Pipeline baseColorPipeline;
@@ -145,16 +155,25 @@ public:
 private:
     GlobalSceneData globalSceneData;
 
-    void initColorTarget();
+    struct RenderTarget
+    {
+        gfx::AllocatedImage image;
+        VkImageView view;
+    };
+
+    RenderTarget createHDRColorTarget();
     void initDepthTarget();
     void initDescriptorPool();
     void initImmediateStructures();
     void initFrameData();
     void initGraphicsPipelines();
+    void initScreenSpacePipelines();
     void initImGui(SDL_Window* window);
     void initScene();
 
     void drawScene(VkCommandBuffer cmd);
+
+    void renderPostFX(VkCommandBuffer cmd, FrameData& frame, VkImageView colorAttachView, VkExtent2D renderExtent);
     void renderImGui(VkCommandBuffer cmd, VkImageView colorAttachView, VkExtent2D renderExtent);
 
     FrameData& getCurrentFrameData();

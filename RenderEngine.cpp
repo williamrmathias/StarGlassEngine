@@ -28,8 +28,6 @@ void RenderEngine::init(SDL_Window* window)
 {
     device = std::make_unique<gfx::Device>(window);
 
-    initColorTarget();
-
     initDepthTarget();
 
     initDescriptorPool();
@@ -39,6 +37,7 @@ void RenderEngine::init(SDL_Window* window)
     initFrameData();
 
     initGraphicsPipelines();
+    initScreenSpacePipelines();
 
     initImGui(window);
 
@@ -76,7 +75,7 @@ void RenderEngine::render()
 
     // transition color image to color attachment layout
     transitionImageLayoutCoarse(
-        cmd, colorImage.image,
+        cmd, frame.hdrColorImage.image,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_IMAGE_ASPECT_COLOR_BIT
     );
@@ -95,7 +94,7 @@ void RenderEngine::render()
     );
 
     vkCmdBindDescriptorSets(
-        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline.layout, 0, 1, &frame.descriptorSet, 
+        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline.layout, 0, 1, &frame.globalDescriptorSet, 
         0, nullptr
     );
 
@@ -103,7 +102,7 @@ void RenderEngine::render()
     VkRenderingAttachmentInfo colorAttachInfo{
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
         .pNext = nullptr,
-        .imageView = colorView,
+        .imageView = frame.hdrColorView,
         .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         .resolveMode = VK_RESOLVE_MODE_NONE,
         .resolveImageView = VK_NULL_HANDLE,
@@ -171,8 +170,8 @@ void RenderEngine::render()
     VkImageView swapchainImageView = device->swapchain.swapchainImageViews[swapchainIdx];
 
     VkExtent3D colorImageExtent{
-        colorImage.extents.width,
-        colorImage.extents.height,
+        frame.hdrColorImage.extents.width,
+        frame.hdrColorImage.extents.height,
         1
     };
     VkExtent3D swapchainExtent{
@@ -181,22 +180,22 @@ void RenderEngine::render()
         1
     };
 
-    blitImageToImage(
-        cmd,
-        colorImage.image, swapchainImage,
-        colorImageExtent, swapchainExtent,
-        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_UNDEFINED,
-        VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_ASPECT_COLOR_BIT
+    // transition hdr color buffer to readable layout for postFX pass
+    transitionImageLayoutCoarse(
+        cmd, frame.hdrColorImage.image,
+        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT
     );
 
-    // transition swapchain image to drawable layout to render ui
+    // transition swapchain image to drawable layout to render ui & screen space FX
     transitionImageLayoutCoarse(
         cmd, swapchainImage,
         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_IMAGE_ASPECT_COLOR_BIT
     );
 
-    // render ui
+    renderPostFX(cmd, frame, swapchainImageView, device->swapchain.swapchainExtent);
+
     renderImGui(cmd, swapchainImageView, device->swapchain.swapchainExtent);
 
     // transition swapchain image to presentable layout
@@ -272,6 +271,8 @@ void RenderEngine::FrameData::cleanup(gfx::Device* device)
     vkDestroyCommandPool(device->device, commandPool, nullptr);
 
     gfx::destroyAllocatedBuffer(device, uniformBuffer);
+    gfx::destroyAllocatedImage(device, hdrColorImage);
+    vkDestroyImageView(device->device, hdrColorView, nullptr);
 }
 
 void RenderEngine::cleanup()
@@ -296,21 +297,23 @@ void RenderEngine::cleanup()
     vkDestroyDescriptorPool(device->device, globalDescriptorPool, nullptr);
     vkDestroyDescriptorSetLayout(device->device, globalSceneDataLayout, nullptr);
     vkDestroyDescriptorSetLayout(device->device, materialLayout, nullptr);
+    vkDestroyDescriptorSetLayout(device->device, screenSpaceLayout, nullptr);
 
     {
         // pipelines
         graphicsPipeline.cleanup(device.get());
+        screenSpacePipeline.cleanup(device.get());
+
         baseColorPipeline.cleanup(device.get());
         metalPipeline.cleanup(device.get());
         roughPipeline.cleanup(device.get());
         normalPipeline.cleanup(device.get());
     }
 
-    destroyAllocatedImage(device.get(), colorImage);
-    vkDestroyImageView(device->device, colorView, nullptr);
-
     destroyAllocatedImage(device.get(), depthImage);
     vkDestroyImageView(device->device, depthView, nullptr);
+
+    vkDestroySampler(device->device, screenSpaceSampler, nullptr);
 
     device.reset();
 }
@@ -416,9 +419,11 @@ void RenderEngine::setActiveDrawPipeline(PipelineType pipeline)
     }
 }
 
-void RenderEngine::initColorTarget()
+RenderEngine::RenderTarget RenderEngine::createHDRColorTarget()
 {
-    VkFormat colorFormat = VK_FORMAT_R8G8B8A8_UNORM;
+    RenderTarget target;
+
+    VkFormat colorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 
     // get color format
     VkFormatProperties formatProps;
@@ -426,17 +431,18 @@ void RenderEngine::initColorTarget()
     bool supportsFormat = formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
     if (!supportsFormat)
     {
-        SDL_LogError(0, "Depth image error: format not supported by device\n");
+        SDL_LogError(0, "Color image error: format not supported by device\n");
         std::abort();
     }
 
-    colorImage = gfx::createAllocatedImage(
+    target.image = gfx::createAllocatedImage(
         device.get(),
-        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
         colorFormat, device->swapchain.swapchainExtent, /*useMips*/false
     );
 
-    colorView = createImageView(device.get(), colorImage.image, colorImage.format, VK_IMAGE_ASPECT_COLOR_BIT);
+    target.view = createImageView(device.get(), target.image.image, target.image.format, VK_IMAGE_ASPECT_COLOR_BIT);
+    return target;
 }
 
 void RenderEngine::initDepthTarget()
@@ -523,8 +529,27 @@ void RenderEngine::initDescriptorPool()
 
     VK_Check(vkCreateDescriptorSetLayout(device->device, &layoutInfo, nullptr, &materialLayout));
 
+    // make screen space pass descriptor layout
+    VkDescriptorSetLayoutBinding screenSpaceBinding{
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = nullptr
+    };
+
+    layoutInfo = VkDescriptorSetLayoutCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .bindingCount = 1,
+        .pBindings = &screenSpaceBinding
+    };
+
+    VK_Check(vkCreateDescriptorSetLayout(device->device, &layoutInfo, nullptr, &screenSpaceLayout));
+
     // make descriptor pool
-    std::array<VkDescriptorPoolSize, 2> poolSizes;
+    std::array<VkDescriptorPoolSize, 3> poolSizes;
 
     poolSizes[0] = VkDescriptorPoolSize{
         .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
@@ -536,12 +561,17 @@ void RenderEngine::initDescriptorPool()
         .descriptorCount = NUM_MATERIALS_MAX
     };
 
+    poolSizes[2] = VkDescriptorPoolSize{
+    .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+    .descriptorCount = static_cast<uint32_t>(NUM_FRAMES)
+    };
+
     VkDescriptorPoolCreateInfo poolInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
-        .maxSets = NUM_MATERIALS_MAX + NUM_FRAMES,
-        .poolSizeCount = 2,
+        .maxSets = NUM_MATERIALS_MAX + NUM_FRAMES + NUM_FRAMES,
+        .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
         .pPoolSizes = poolSizes.data()
     };
 
@@ -616,7 +646,7 @@ void RenderEngine::initFrameData()
         VK_Check(vkCreateFence(device->device, &fenceInfo, nullptr, &frames[i].renderFence));
     }
 
-    // create uniform buffers + descriptor sets
+    // create global uniform buffers + descriptor sets
     for (size_t i = 0; i < NUM_FRAMES; i++)
     {
         frames[i].uniformBuffer = gfx::createAllocatedBuffer(
@@ -639,7 +669,7 @@ void RenderEngine::initFrameData()
 
     VK_Check(vkAllocateDescriptorSets(device->device, &descriptorInfo, descriptorSets.data()));
     for (size_t i = 0; i < NUM_FRAMES; i++)
-        frames[i].descriptorSet = descriptorSets[i];
+        frames[i].globalDescriptorSet = descriptorSets[i];
 
     // update descriptor sets
     for (size_t i = 0; i < NUM_FRAMES; i++)
@@ -653,13 +683,67 @@ void RenderEngine::initFrameData()
         VkWriteDescriptorSet write{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .pNext = nullptr,
-            .dstSet = frames[i].descriptorSet,
+            .dstSet = frames[i].globalDescriptorSet,
             .dstBinding = 0,
             .dstArrayElement = 0,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
             .pImageInfo = nullptr,
             .pBufferInfo = &bufferInfo,
+            .pTexelBufferView = nullptr
+        };
+
+        vkUpdateDescriptorSets(device->device, 1, &write, 0, nullptr);
+    }
+
+    // create hdr color buffers + descriptor sets
+    for (size_t i = 0; i < NUM_FRAMES; i++)
+    {
+        RenderTarget target = createHDRColorTarget();
+        frames[i].hdrColorImage = target.image;
+        frames[i].hdrColorView = target.view;
+
+        frames[i].uniformBuffer = gfx::createAllocatedBuffer(
+            device.get(), sizeof(globalSceneData),
+            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+        );
+    }
+
+    layouts.fill(screenSpaceLayout);
+
+    descriptorInfo = VkDescriptorSetAllocateInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .pNext = nullptr,
+        .descriptorPool = globalDescriptorPool,
+        .descriptorSetCount = static_cast<uint32_t>(NUM_FRAMES),
+        .pSetLayouts = layouts.data()
+    };
+
+    VK_Check(vkAllocateDescriptorSets(device->device, &descriptorInfo, descriptorSets.data()));
+    for (size_t i = 0; i < NUM_FRAMES; i++)
+        frames[i].screenSpaceDescriptorSet = descriptorSets[i];
+
+    // update screen space descriptor sets
+    screenSpaceSampler = gfx::createSampler(device.get(), gfx::SamplerDesc::initDefault());
+
+    for (size_t i = 0; i < NUM_FRAMES; i++)
+    {
+        VkDescriptorImageInfo imageInfo{
+            .sampler = screenSpaceSampler,
+            .imageView = frames[i].hdrColorView,
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        };
+
+        VkWriteDescriptorSet write{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = nullptr,
+            .dstSet = frames[i].screenSpaceDescriptorSet,
+            .dstBinding = 0,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &imageInfo,
+            .pBufferInfo = nullptr,
             .pTexelBufferView = nullptr
         };
 
@@ -680,7 +764,7 @@ void RenderEngine::initGraphicsPipelines()
         VkShaderModule fragShader = loadShaderModule(fragmentShaderPath.string().c_str());
 
         // render attachments
-        pipelineBuilder.setColorAttachmentFormats(std::span{ &device->swapchain.swapchainFormat, 1 });
+        pipelineBuilder.setColorAttachmentFormats(std::span{ &frames[0].hdrColorImage.format, 1});
         pipelineBuilder.setDepthAttachmentFormat(depthImage.format);
 
         // shader info
@@ -748,6 +832,42 @@ void RenderEngine::initGraphicsPipelines()
     vkDestroyShaderModule(device->device, vertShader, nullptr);
 }
 
+void RenderEngine::initScreenSpacePipelines()
+{
+    GraphicsPipelineBuilder pipelineBuilder;
+
+    std::filesystem::path vertexShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/ScreenSpace_screenSpaceVS.spirv");
+    VkShaderModule vertShader = loadShaderModule(vertexShaderPath.string().c_str());
+
+    std::filesystem::path fragShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/ScreenSpace_toneMapPS.spirv");
+    VkShaderModule fragShader = loadShaderModule(fragShaderPath.string().c_str());
+
+    // render attachments
+    pipelineBuilder.setColorAttachmentFormats(std::span{ &device->swapchain.swapchainFormat, 1 });
+    
+    // shader info
+    pipelineBuilder.setShaderStages(vertShader, "screenSpaceVS", fragShader, "toneMapPS");
+    pipelineBuilder.setPushConstantSize(static_cast<uint32_t>(sizeof(ScreenSpacePushConstants)));
+    pipelineBuilder.setDescriptorSetLayouts(std::span{ &screenSpaceLayout, 1});
+
+    // IA info
+    // no vertex input!
+    pipelineBuilder.setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+
+    // rasterization info
+    pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
+    pipelineBuilder.setSampleCount(VK_SAMPLE_COUNT_1_BIT);
+    pipelineBuilder.setDepthMode(VK_TRUE, VK_TRUE);
+    pipelineBuilder.disableBlendMode();
+
+    // build pipeline
+    screenSpacePipeline = pipelineBuilder.build(device.get());
+
+    // Shader modules can be destroyed after the pipeline is created
+    vkDestroyShaderModule(device->device, vertShader, nullptr);
+    vkDestroyShaderModule(device->device, fragShader, nullptr);
+}
+
 void RenderEngine::initImGui(SDL_Window* window)
 {
     // Setup Dear ImGui context
@@ -797,7 +917,7 @@ void RenderEngine::initScene()
     setSunDirection(0.f, 0.f);
 
     // load gltf
-    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/Bistro.glb");
+    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/Sponza/Sponza.gltf");
     loadedGltf = std::make_unique<LoadedGltf>(this, gltfPath.string().c_str());
 }
 
@@ -908,6 +1028,51 @@ void RenderEngine::drawScene(VkCommandBuffer cmd)
             vkCmdDrawIndexed(cmd, primitive.indexCount, 1, 0, 0, 0);
         }
     }
+}
+
+void RenderEngine::renderPostFX(
+    VkCommandBuffer cmd, FrameData& frame, VkImageView colorAttachView, VkExtent2D renderExtent
+)
+{
+    // bind hdr color buffer
+    vkCmdBindDescriptorSets(
+        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, screenSpacePipeline.layout,
+        0, 1, &frame.screenSpaceDescriptorSet, 0, nullptr
+    );
+
+    // begin rendering
+    VkRenderingAttachmentInfo colorAttachInfo{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+        .pNext = nullptr,
+        .imageView = colorAttachView,
+        .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .resolveMode = VK_RESOLVE_MODE_NONE,
+        .resolveImageView = VK_NULL_HANDLE,
+        .resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .clearValue = VkClearValue{.color = VkClearColorValue{0.f, 0.f, 0.f, 1.f} }
+    };
+
+    VkRenderingInfo renderInfo{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .renderArea = VkRect2D{ VkOffset2D{0, 0}, renderExtent},
+        .layerCount = 1,
+        .viewMask = 0,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &colorAttachInfo,
+        .pDepthAttachment = nullptr,
+        .pStencilAttachment = nullptr
+    };
+
+    vkCmdBeginRendering(cmd, &renderInfo);
+
+
+
+    // end rendering
+    vkCmdEndRendering(cmd);
 }
 
 void RenderEngine::renderImGui(
