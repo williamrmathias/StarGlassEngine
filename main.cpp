@@ -83,6 +83,22 @@ int main()
                     renderEngine.setSunDirection(azimuth, altitude);
             }
 
+            if (ImGui::CollapsingHeader("Tone Mapping Settings"))
+            {
+                static float exposure = 1.f;
+                if (ImGui::SliderFloat("Exposure", &exposure, 0.f, 10.f))
+                    renderEngine.setExposure(exposure);
+
+                using PipelineType = gfx::RenderEngine::PipelineType;
+                static PipelineType pipeline = PipelineType::ToneMap;
+                if (ImGui::Selectable("ToneMap", pipeline == PipelineType::ToneMap))
+                    pipeline = PipelineType::ToneMap;
+                if (ImGui::Selectable("PassThrough", pipeline == PipelineType::PassThrough))
+                    pipeline = PipelineType::PassThrough;
+
+                renderEngine.setActiveScreenSpacePipeline(pipeline);
+            }
+
             if (ImGui::CollapsingHeader("Debug Shader Settings"))
             {
                 using PipelineType = gfx::RenderEngine::PipelineType;
@@ -98,7 +114,7 @@ int main()
                 if (ImGui::Selectable("NormalDebug", pipeline == PipelineType::NormalDebug))
                     pipeline = PipelineType::NormalDebug;
 
-                renderEngine.setActiveDrawPipeline(pipeline);
+                renderEngine.setActiveMainPassPipeline(pipeline);
             }
 
             if (ImGui::CollapsingHeader("Camera Settings"))

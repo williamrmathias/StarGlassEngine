@@ -69,6 +69,13 @@ struct PushConstants
     float padding[10];
 };
 
+// must be 128 bytes
+struct ScreenSpacePushConstants
+{
+    float exposure;
+    float padding[31];
+};
+
 class RenderEngine
 {
 public:
@@ -80,15 +87,15 @@ public:
     VkCommandBuffer immediateCommandBuffer;
     VkFence immediateFence;
 
-    AllocatedImage colorImage;
-    VkImageView colorView;
-
     AllocatedImage depthImage;
     VkImageView depthView;
+
+    VkSampler screenSpaceSampler;
 
     VkDescriptorPool globalDescriptorPool;
     VkDescriptorSetLayout globalSceneDataLayout;
     VkDescriptorSetLayout materialLayout;
+    VkDescriptorSetLayout screenSpaceLayout;
 
     struct FrameData
     {
@@ -100,8 +107,11 @@ public:
         VkCommandBuffer commandBuffer;
 
         AllocatedBuffer uniformBuffer;
+        VkDescriptorSet globalDescriptorSet;
 
-        VkDescriptorSet descriptorSet;
+        AllocatedImage hdrColorImage;
+        VkImageView hdrColorView;
+        VkDescriptorSet screenSpaceDescriptorSet;
 
         void cleanup(Device* device);
     };
@@ -110,16 +120,19 @@ public:
 
     enum class PipelineType : uint8_t
     {
+        // main pass pipelines
         MainGraphics,
         BaseColorDebug,
         MetalDebug,
         RoughDebug,
         NormalDebug,
-        NumPipelineTypes
+
+        // screen space pipelines
+        ToneMap,
+        PassThrough
     };
 
     Pipeline activePipeline;
-
     Pipeline graphicsPipeline;
 
     // debug pipelines
@@ -128,6 +141,10 @@ public:
     Pipeline roughPipeline;
     Pipeline normalPipeline;
 
+    Pipeline activeSSPipeline;
+    Pipeline toneMapPipeline;
+    Pipeline passThroughPipeline;
+
     void init(SDL_Window* window);
     void render();
     void cleanup();
@@ -135,26 +152,36 @@ public:
     void setSunDirection(float azimuth, float altitude);
     void setViewMatrix(const glm::mat4 view);
     void setViewPosition(const glm::vec3 viewPosition);
-    void setActiveDrawPipeline(PipelineType pipeline);
-
-    GlobalSceneData& getGlobalSceneData() { return globalSceneData; }
+    void setActiveMainPassPipeline(PipelineType pipeline);
+    void setActiveScreenSpacePipeline(PipelineType pipeline);
+    void setExposure(float exposureIn) { exposure = exposureIn; }
 
     VkCommandBuffer startImmediateCommands();
     void endAndSubmitImmediateCommands();
 
 private:
     GlobalSceneData globalSceneData;
+    float exposure = 1.f;
 
-    void initColorTarget();
+    struct RenderTarget
+    {
+        gfx::AllocatedImage image;
+        VkImageView view;
+    };
+
+    RenderTarget createHDRColorTarget() const;
     void initDepthTarget();
     void initDescriptorPool();
     void initImmediateStructures();
     void initFrameData();
     void initGraphicsPipelines();
+    void initScreenSpacePipelines();
     void initImGui(SDL_Window* window);
     void initScene();
 
     void drawScene(VkCommandBuffer cmd);
+
+    void renderPostFX(VkCommandBuffer cmd, FrameData& frame, VkImageView colorAttachView, VkExtent2D renderExtent);
     void renderImGui(VkCommandBuffer cmd, VkImageView colorAttachView, VkExtent2D renderExtent);
 
     FrameData& getCurrentFrameData();
