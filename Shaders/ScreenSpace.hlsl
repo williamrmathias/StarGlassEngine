@@ -4,6 +4,14 @@ Texture2D hdrColorBuffer;
 [[vk::binding(0, 0)]]
 SamplerState hdrColorSampler;
 
+struct PushConstants
+{
+    float exposure;
+};
+
+[[vk::push_constant]]
+ConstantBuffer<PushConstants> pushConstants;
+
 struct VertexInput
 {
     [[vk::location(0)]] uint vertexID : SV_VertexID;
@@ -37,10 +45,27 @@ VertexOutput screenSpaceVS(VertexInput input)
 	return output;
 }
 
-PixelOutput toneMapPS(VertexOutput input)
+PixelOutput passThroughPS(VertexOutput input)
 {
     PixelOutput result;
     result.color = hdrColorBuffer.Sample(hdrColorSampler, input.uv);
+
+    return result;
+}
+
+PixelOutput toneMapPS(VertexOutput input)
+{
+    PixelOutput result;
+    float3 hdrColor = hdrColorBuffer.Sample(hdrColorSampler, input.uv).rgb;
+    
+    // exposure tone mapping
+    float3 mapped = 1.f - exp(-hdrColor * pushConstants.exposure);
+    
+    // gamma correction
+    const float rcpGamma =  1.f / 2.2f;
+    mapped = pow(mapped, rcpGamma);
+    
+    result.color = float4(mapped, 1.f);
     
     return result;
 }

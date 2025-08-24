@@ -72,7 +72,8 @@ struct PushConstants
 // must be 128 bytes
 struct ScreenSpacePushConstants
 {
-    float padding[32];
+    float exposure;
+    float padding[31];
 };
 
 class RenderEngine
@@ -119,24 +120,30 @@ public:
 
     enum class PipelineType : uint8_t
     {
+        // main pass pipelines
         MainGraphics,
         BaseColorDebug,
         MetalDebug,
         RoughDebug,
         NormalDebug,
-        NumPipelineTypes
+
+        // screen space pipelines
+        ToneMap,
+        PassThrough
     };
 
     Pipeline activePipeline;
-
     Pipeline graphicsPipeline;
-    Pipeline screenSpacePipeline;
 
     // debug pipelines
     Pipeline baseColorPipeline;
     Pipeline metalPipeline;
     Pipeline roughPipeline;
     Pipeline normalPipeline;
+
+    Pipeline activeSSPipeline;
+    Pipeline toneMapPipeline;
+    Pipeline passThroughPipeline;
 
     void init(SDL_Window* window);
     void render();
@@ -145,15 +152,16 @@ public:
     void setSunDirection(float azimuth, float altitude);
     void setViewMatrix(const glm::mat4 view);
     void setViewPosition(const glm::vec3 viewPosition);
-    void setActiveDrawPipeline(PipelineType pipeline);
-
-    GlobalSceneData& getGlobalSceneData() { return globalSceneData; }
+    void setActiveMainPassPipeline(PipelineType pipeline);
+    void setActiveScreenSpacePipeline(PipelineType pipeline);
+    void setExposure(float exposureIn) { exposure = exposureIn; }
 
     VkCommandBuffer startImmediateCommands();
     void endAndSubmitImmediateCommands();
 
 private:
     GlobalSceneData globalSceneData;
+    float exposure = 1.f;
 
     struct RenderTarget
     {
@@ -161,7 +169,7 @@ private:
         VkImageView view;
     };
 
-    RenderTarget createHDRColorTarget();
+    RenderTarget createHDRColorTarget() const;
     void initDepthTarget();
     void initDescriptorPool();
     void initImmediateStructures();

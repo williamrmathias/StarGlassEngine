@@ -270,6 +270,7 @@ void RenderEngine::FrameData::cleanup(gfx::Device* device)
     vkDestroyCommandPool(device->device, commandPool, nullptr);
 
     gfx::destroyAllocatedBuffer(device, uniformBuffer);
+
     gfx::destroyAllocatedImage(device, hdrColorImage);
     vkDestroyImageView(device->device, hdrColorView, nullptr);
 }
@@ -301,12 +302,14 @@ void RenderEngine::cleanup()
     {
         // pipelines
         graphicsPipeline.cleanup(device.get());
-        screenSpacePipeline.cleanup(device.get());
 
         baseColorPipeline.cleanup(device.get());
         metalPipeline.cleanup(device.get());
         roughPipeline.cleanup(device.get());
         normalPipeline.cleanup(device.get());
+
+        toneMapPipeline.cleanup(device.get());
+        passThroughPipeline.cleanup(device.get());
     }
 
     destroyAllocatedImage(device.get(), depthImage);
@@ -394,7 +397,7 @@ void RenderEngine::setViewPosition(const glm::vec3 viewPosition)
     globalSceneData.viewPosition = viewPosition;
 }
 
-void RenderEngine::setActiveDrawPipeline(PipelineType pipeline)
+void RenderEngine::setActiveMainPassPipeline(PipelineType pipeline)
 {
     switch (pipeline)
     {
@@ -418,7 +421,22 @@ void RenderEngine::setActiveDrawPipeline(PipelineType pipeline)
     }
 }
 
-RenderEngine::RenderTarget RenderEngine::createHDRColorTarget()
+void RenderEngine::setActiveScreenSpacePipeline(PipelineType pipeline)
+{
+    switch (pipeline)
+    {
+    case gfx::RenderEngine::PipelineType::ToneMap:
+        activeSSPipeline = toneMapPipeline;
+        break;
+    case gfx::RenderEngine::PipelineType::PassThrough:
+        activeSSPipeline = passThroughPipeline;
+        break;
+    default:
+        break;
+    }
+}
+
+RenderEngine::RenderTarget RenderEngine::createHDRColorTarget() const
 {
     RenderTarget target;
 
@@ -701,11 +719,6 @@ void RenderEngine::initFrameData()
         RenderTarget target = createHDRColorTarget();
         frames[i].hdrColorImage = target.image;
         frames[i].hdrColorView = target.view;
-
-        frames[i].uniformBuffer = gfx::createAllocatedBuffer(
-            device.get(), sizeof(globalSceneData),
-            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-        );
     }
 
     layouts.fill(screenSpaceLayout);
@@ -838,33 +851,47 @@ void RenderEngine::initScreenSpacePipelines()
     std::filesystem::path vertexShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/ScreenSpace_screenSpaceVS.spirv");
     VkShaderModule vertShader = loadShaderModule(vertexShaderPath.string().c_str());
 
-    std::filesystem::path fragShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/ScreenSpace_toneMapPS.spirv");
-    VkShaderModule fragShader = loadShaderModule(fragShaderPath.string().c_str());
+    {
+        // tone map pipeline
+        std::filesystem::path fragShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/ScreenSpace_toneMapPS.spirv");
+        VkShaderModule fragShader = loadShaderModule(fragShaderPath.string().c_str());
 
-    // render attachments
-    pipelineBuilder.setColorAttachmentFormats(std::span{ &device->swapchain.swapchainFormat, 1 });
-    
-    // shader info
-    pipelineBuilder.setShaderStages(vertShader, "screenSpaceVS", fragShader, "toneMapPS");
-    pipelineBuilder.setPushConstantSize(static_cast<uint32_t>(sizeof(ScreenSpacePushConstants)));
-    pipelineBuilder.setDescriptorSetLayouts(std::span{ &screenSpaceLayout, 1});
+        // render attachments
+        pipelineBuilder.setColorAttachmentFormats(std::span{ &device->swapchain.swapchainFormat, 1 });
 
-    // IA info
-    // no vertex input!
-    pipelineBuilder.setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        // shader info
+        pipelineBuilder.setShaderStages(vertShader, "screenSpaceVS", fragShader, "toneMapPS");
+        pipelineBuilder.setPushConstantSize(static_cast<uint32_t>(sizeof(ScreenSpacePushConstants)));
+        pipelineBuilder.setDescriptorSetLayouts(std::span{ &screenSpaceLayout, 1 });
 
-    // rasterization info
-    pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
-    pipelineBuilder.setSampleCount(VK_SAMPLE_COUNT_1_BIT);
-    pipelineBuilder.setDepthMode(VK_TRUE, VK_TRUE);
-    pipelineBuilder.disableBlendMode();
+        // IA info
+        // no vertex input!
+        pipelineBuilder.setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
 
-    // build pipeline
-    screenSpacePipeline = pipelineBuilder.build(device.get());
+        // rasterization info
+        pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
+        pipelineBuilder.setSampleCount(VK_SAMPLE_COUNT_1_BIT);
+        pipelineBuilder.setDepthMode(VK_TRUE, VK_TRUE);
+        pipelineBuilder.disableBlendMode();
 
-    // Shader modules can be destroyed after the pipeline is created
+        // build pipeline
+        toneMapPipeline = pipelineBuilder.build(device.get());
+
+        vkDestroyShaderModule(device->device, fragShader, nullptr);
+    }
+
+    {
+        // pass through pipeline
+        std::filesystem::path fragShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/ScreenSpace_passThroughPS.spirv");
+        VkShaderModule fragShader = loadShaderModule(fragShaderPath.string().c_str());
+        pipelineBuilder.setShaderStages(vertShader, "screenSpaceVS", fragShader, "passThroughPS");
+        passThroughPipeline = pipelineBuilder.build(device.get());
+
+        vkDestroyShaderModule(device->device, fragShader, nullptr);
+    }
+
+    activeSSPipeline = toneMapPipeline;
     vkDestroyShaderModule(device->device, vertShader, nullptr);
-    vkDestroyShaderModule(device->device, fragShader, nullptr);
 }
 
 void RenderEngine::initImGui(SDL_Window* window)
@@ -1034,12 +1061,23 @@ void RenderEngine::renderPostFX(
 )
 {
     // bind pipeline
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, screenSpacePipeline.pipeline);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activeSSPipeline.pipeline);
 
     // bind hdr color buffer
     vkCmdBindDescriptorSets(
-        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, screenSpacePipeline.layout,
+        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activeSSPipeline.layout,
         0, 1, &frame.screenSpaceDescriptorSet, 0, nullptr
+    );
+
+    // bind push constants
+    ScreenSpacePushConstants pushConstants{
+        .exposure = exposure
+    };
+
+    vkCmdPushConstants(
+        cmd, activePipeline.layout,
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+        sizeof(pushConstants), &pushConstants
     );
 
     // begin rendering
