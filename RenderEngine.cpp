@@ -165,7 +165,6 @@ void RenderEngine::render()
     // end rendering
     vkCmdEndRendering(cmd);
 
-    // blit main color image to swapchain image
     VkImage swapchainImage = device->swapchain.swapchainImages[swapchainIdx];
     VkImageView swapchainImageView = device->swapchain.swapchainImageViews[swapchainIdx];
 
@@ -190,7 +189,7 @@ void RenderEngine::render()
     // transition swapchain image to drawable layout to render ui & screen space FX
     transitionImageLayoutCoarse(
         cmd, swapchainImage,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_IMAGE_ASPECT_COLOR_BIT
     );
 
@@ -1034,6 +1033,9 @@ void RenderEngine::renderPostFX(
     VkCommandBuffer cmd, FrameData& frame, VkImageView colorAttachView, VkExtent2D renderExtent
 )
 {
+    // bind pipeline
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, screenSpacePipeline.pipeline);
+
     // bind hdr color buffer
     vkCmdBindDescriptorSets(
         cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, screenSpacePipeline.layout,
@@ -1049,7 +1051,7 @@ void RenderEngine::renderPostFX(
         .resolveMode = VK_RESOLVE_MODE_NONE,
         .resolveImageView = VK_NULL_HANDLE,
         .resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
         .clearValue = VkClearValue{.color = VkClearColorValue{0.f, 0.f, 0.f, 1.f} }
     };
@@ -1069,7 +1071,7 @@ void RenderEngine::renderPostFX(
 
     vkCmdBeginRendering(cmd, &renderInfo);
 
-
+    vkCmdDraw(cmd, 3, 1, 0, 0);
 
     // end rendering
     vkCmdEndRendering(cmd);
