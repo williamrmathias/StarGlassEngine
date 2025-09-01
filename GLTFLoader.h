@@ -41,6 +41,7 @@ using MeshHandle = uint64_t;
 
 static const uint64_t defaultHandle = 0;
 static const uint64_t errorHandle = 1;
+static const uint64_t defaultNormalMapHandle = 1;
 
 struct Texture
 {

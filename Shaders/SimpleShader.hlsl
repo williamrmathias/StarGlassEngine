@@ -113,7 +113,7 @@ float3x3 cotangentFrame(float3 N, float3 posWS, float2 uv)
     float3 B = dp2perp * duv1.y + dp1perp * duv2.y;
 
     // Make it scale-invariant and robust
-    float invmax = rsqrt(max(dot(T, T), dot(B, B)));
+    float invmax = rsqrt(max(max(dot(T, T), dot(B, B)), 1e-20));
     T *= invmax;
     B *= invmax;
 

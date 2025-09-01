@@ -180,6 +180,55 @@ void LoadedGltf::initDefaultAssets()
         imageMap[id] = errorHandle;
     }
 
+    constexpr uint32_t kNormalMapImageHandle = 2;
+    {
+        // default normal map image
+        uint32_t normData = glm::packUnorm4x8(glm::vec4(0.5f, 0.5f, 1.f, 1.f));
+        VkDeviceSize imageDataSize = static_cast<VkDeviceSize>(1 * 1 * STBI_rgb_alpha);
+
+        gfx::Device* device = engine->device.get();
+
+        gfx::AllocatedBuffer stagingBuffer = gfx::createAllocatedBuffer(
+            device, imageDataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+        );
+
+        gfx::writeToAllocatedBuffer(device, &normData, imageDataSize, stagingBuffer);
+
+        gfx::AllocatedImage newImage = gfx::createAllocatedImage(
+            device, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ 1, 1 }, /*useMips*/false
+        );
+
+        VkImageSubresourceLayers subresource{
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .mipLevel = 0,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        };
+
+        VkCommandBuffer cmd = engine->startImmediateCommands();
+        gfx::copyBufferToImage(
+            cmd,
+            stagingBuffer, newImage,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_ASPECT_COLOR_BIT
+        );
+        gfx::transitionImageLayoutCoarse(
+            cmd, newImage.image,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT
+        );
+        engine->endAndSubmitImmediateCommands();
+
+        gfx::destroyAllocatedBuffer(device, stagingBuffer);
+        images.push_back(newImage);
+
+        assert(images.size() == kNormalMapImageHandle + 1);
+
+        AssetId id = util::fastHash(&normData, static_cast<int>(imageDataSize));
+        imageMap[id] = defaultNormalMapHandle;
+    }
+
     {
         // default sampler (linear filter - repeat wrap)
         gfx::SamplerDesc samplerDescription = gfx::SamplerDesc::initDefault();
@@ -206,6 +255,20 @@ void LoadedGltf::initDefaultAssets()
 
         textures.push_back(newTexture);
         textureMap[invalidAssetId] = defaultHandle;
+    }
+
+    {
+        // default texture (bluish texture - default sampler)
+        Texture newTexture = { .image = kNormalMapImageHandle, .sampler = defaultHandle };
+
+        // create image view
+        newTexture.view = gfx::createImageView(
+            engine->device.get(), images[newTexture.image].image,
+            VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT
+        );
+
+        textures.push_back(newTexture);
+        textureMap[invalidAssetId] = defaultNormalMapHandle;
     }
 
     {
@@ -645,7 +708,7 @@ Material Material::initMaterial()
 
     newMaterial.baseColorTex = defaultHandle;
     newMaterial.metalRoughTex = defaultHandle;
-    newMaterial.normalTex = defaultHandle;
+    newMaterial.normalTex = defaultNormalMapHandle;
 
     return newMaterial;
 }
