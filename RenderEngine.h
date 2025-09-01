@@ -126,6 +126,8 @@ public:
         MetalDebug,
         RoughDebug,
         NormalDebug,
+        VertexNormalDebug,
+        UvDebug,
 
         // screen space pipelines
         ToneMap,
@@ -140,6 +142,8 @@ public:
     Pipeline metalPipeline;
     Pipeline roughPipeline;
     Pipeline normalPipeline;
+    Pipeline vertNormalPipeline;
+    Pipeline uvPipeline;
 
     Pipeline activeSSPipeline;
     Pipeline toneMapPipeline;
@@ -150,6 +154,7 @@ public:
     void cleanup();
 
     void setSunDirection(float azimuth, float altitude);
+    void setSunLuminance(float luminance);
     void setViewMatrix(const glm::mat4 view);
     void setViewPosition(const glm::vec3 viewPosition);
     void setActiveMainPassPipeline(PipelineType pipeline);

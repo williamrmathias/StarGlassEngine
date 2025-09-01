@@ -307,6 +307,8 @@ void RenderEngine::cleanup()
         metalPipeline.cleanup(device.get());
         roughPipeline.cleanup(device.get());
         normalPipeline.cleanup(device.get());
+        vertNormalPipeline.cleanup(device.get());
+        uvPipeline.cleanup(device.get());
 
         toneMapPipeline.cleanup(device.get());
         passThroughPipeline.cleanup(device.get());
@@ -384,6 +386,11 @@ void RenderEngine::setSunDirection(float azimuth, float altitude)
     };
 }
 
+void RenderEngine::setSunLuminance(float luminance)
+{
+    globalSceneData.lightColor = luminance * glm::vec3(1.f, 1.f, 1.f);
+}
+
 void RenderEngine::setViewMatrix(const glm::mat4 view)
 {
     glm::mat4 projection = glm::perspective(glm::radians(45.f), 1280.f / 720.f, 0.1f, 100.f);
@@ -415,6 +422,12 @@ void RenderEngine::setActiveMainPassPipeline(PipelineType pipeline)
         break;
     case gfx::RenderEngine::PipelineType::NormalDebug:
         activePipeline = normalPipeline;
+        break;
+    case gfx::RenderEngine::PipelineType::VertexNormalDebug:
+        activePipeline = vertNormalPipeline;
+        break;
+    case gfx::RenderEngine::PipelineType::UvDebug:
+        activePipeline = uvPipeline;
         break;
     default:
         break;
@@ -790,7 +803,7 @@ void RenderEngine::initGraphicsPipelines()
 
         // IA info
         VkVertexInputBindingDescription vertexBindingDesc = Vertex::getInputBindingDescription();
-        std::array<VkVertexInputAttributeDescription, 5> vertexAttribDesc = Vertex::getInputAttributeDescription();
+        std::array<VkVertexInputAttributeDescription, 4> vertexAttribDesc = Vertex::getInputAttributeDescription();
         pipelineBuilder.setVertexInputState(std::span{ &vertexBindingDesc, 1 }, vertexAttribDesc);
         pipelineBuilder.setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
 
@@ -834,10 +847,24 @@ void RenderEngine::initGraphicsPipelines()
         pipelineBuilder.setShaderStages(vertShader, "simpleVS", normalFragShader, "normalDebugPS");
         normalPipeline = pipelineBuilder.build(device.get());
 
+        // vertex normal
+        std::filesystem::path vertNormalFragShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/vertNormalDebugPS.spirv");
+        VkShaderModule vertNormalFragShader = loadShaderModule(vertNormalFragShaderPath.string().c_str());
+        pipelineBuilder.setShaderStages(vertShader, "simpleVS", vertNormalFragShader, "vertNormalDebugPS");
+        vertNormalPipeline = pipelineBuilder.build(device.get());
+
+        // uv
+        std::filesystem::path uvFragShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/uvDebugPS.spirv");
+        VkShaderModule uvFragShader = loadShaderModule(uvFragShaderPath.string().c_str());
+        pipelineBuilder.setShaderStages(vertShader, "simpleVS", uvFragShader, "uvDebugPS");
+        uvPipeline = pipelineBuilder.build(device.get());
+
         vkDestroyShaderModule(device->device, baseColorFragShader, nullptr);
         vkDestroyShaderModule(device->device, metalFragShader, nullptr);
         vkDestroyShaderModule(device->device, roughFragShader, nullptr);
         vkDestroyShaderModule(device->device, normalFragShader, nullptr);
+        vkDestroyShaderModule(device->device, vertNormalFragShader, nullptr);
+        vkDestroyShaderModule(device->device, uvFragShader, nullptr);
     }
 
     activePipeline = graphicsPipeline;
@@ -940,10 +967,11 @@ void RenderEngine::initScene()
         .lightColor = glm::vec3{1.f, 1.f, 1.f}
     };
 
-    setSunDirection(0.f, 0.f);
+    setSunDirection(0.f, 90.f);
+    setSunLuminance(1.f);
 
     // load gltf
-    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/Sponza/Sponza.gltf");
+    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/Bistro.glb");
     loadedGltf = std::make_unique<LoadedGltf>(this, gltfPath.string().c_str());
 }
 

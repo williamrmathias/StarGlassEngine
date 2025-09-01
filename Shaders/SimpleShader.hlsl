@@ -56,19 +56,16 @@ struct VertexInput
 {
     [[vk::location(0)]] float3 position : POSITION0;
     [[vk::location(1)]] float3 normal : NORMAL0;
-    [[vk::location(2)]] float4 tangent : TANGENT0;
-    [[vk::location(3)]] float2 uv : TEXCOORD0;
-    [[vk::location(4)]] float4 color : COLOR0;
+    [[vk::location(2)]] float2 uv : TEXCOORD0;
+    [[vk::location(3)]] float4 color : COLOR0;
 };
 
 struct VertexOutput
 {
     float4 position : SV_Position;
     float3 positionWorld : TEXCOORD0;
-    float3 tangent : TEXCOORD1;
-    float3 normal : TEXCOORD2;
-    float3 binormal : TEXCOORD3;
-    float2 uv : TEXCOORD4;
+    float3 normal : TEXCOORD1;
+    float2 uv : TEXCOORD2;
     float4 color : COLOR0;
 };
 
@@ -84,16 +81,56 @@ VertexOutput simpleVS(VertexInput input)
     output.position = mul(mvp, float4(input.position, 1.f));
     output.positionWorld = mul(pushConstants.model, float4(input.position, 1.f)).xyz;
     
-    float3 N = normalize(mul(pushConstants.model, float4(input.normal, 0.f)).xyz);
-    float3 T = normalize(mul(pushConstants.model, float4(input.tangent.xyz, 0.f)).xyz);
-    float3 B = normalize(cross(N, T)) * input.tangent.w;
-    
-    output.tangent = T;
+    float3 N = mul(pushConstants.model, float4(input.normal, 0.f)).xyz;
+
     output.normal = N;
-    output.binormal = B;
     output.uv = input.uv;
     output.color = input.color;
     return output;
+}
+
+// ------------------------
+// Cotangent Frame Calculation (http://www.thetenthplanet.de/archives/1180)
+// ------------------------
+
+// Use cotangent frame calculation in pixel shader instead of precomputed values passed in as vertex input.
+// This reduces vertex bandwidth, and helps protect against degenerate mesh assets. Also allows for more flexibility
+// (useful for, ex. procedurally animated normals, etc)
+
+float3x3 cotangentFrame(float3 N, float3 posWS, float2 uv)
+{
+    // screen-space derivatives of world-space position & UV
+    float3 dp1 = ddx(posWS);
+    float3 dp2 = ddy(posWS);
+    float2 duv1 = ddx(uv);
+    float2 duv2 = ddy(uv);
+
+    // Mikk-style cotangent frame from derivatives
+    float3 dp2perp = cross(dp2, N);
+    float3 dp1perp = cross(N, dp1);
+
+    float3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+    float3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+
+    // Make it scale-invariant and robust
+    float invmax = rsqrt(max(dot(T, T), dot(B, B)));
+    T *= invmax;
+    B *= invmax;
+
+    // In HLSL, this constructor sets ROWS; use mul(vec, mat) later.
+    return float3x3(T, B, N);
+}
+
+float3 perturbNormal(float3 Nws, float3 posWS, float2 uv)
+{
+    Nws = normalize(Nws);
+
+    float3 n = normalTex.Sample(normalSampler, uv).xyz * 2.0f - 1.0f;
+
+    float3x3 TBN = cotangentFrame(Nws, posWS, uv);
+
+    // HLSL row-vector multiply: rows are T,B,N
+    return normalize(mul(n, TBN));
 }
 
 // ------------------------
@@ -114,53 +151,63 @@ float D_GGX(float NdotH, float alpha)
 float V_SmithGGXCorrelated(float NdotV, float NdotL, float alpha)
 {
     float alpha2 = alpha * alpha;
-    float GGXV = NdotL * sqrt((NdotV - alpha2 * NdotV) * NdotV + alpha2);
-    float GGXL = NdotV * sqrt((NdotL - alpha2 * NdotL) * NdotL + alpha2);
+    float GGXV = NdotL * sqrt((-NdotV * alpha2 + NdotV) * NdotV + alpha2);
+    float GGXL = NdotV * sqrt((-NdotL * alpha2 + NdotL) * NdotL + alpha2);
     return 0.5f / (GGXV + GGXL);
 }
 
 // Fresnel term based on Schlick's approximation
 // Reflectance at grazing angles (f90) is assumed to be 1
 // Schlick 1994, "An Inexpensive BRDF Model for Physically-Based Rendering"
-float3 F_Schlick(float u, float3 f0)
+float3 F_Schlick(float VdotH, float3 f0)
 {
-    return f0 + (float3(1.f, 1.f, 1.f) - f0) * pow(1.f - u, 5.f);
+    return f0 + (1.f - f0) * pow(1.f - VdotH, 5.f);
 }
 
-// Cook-Torrance specular microfacet model
-float3 specularBRDF(
+// lambertian brdf
+float3 lambert(float3 albedo)
+{
+    return (1.f / PI) * albedo;
+}
+
+float3 brdf(
     float3 baseColor,
     float roughness,
     float metalness,
-    float3 viewDir, 
+    float3 viewDir,
     float3 lightDir,
-    float3 normal,
-    float3 halfway
+    float3 normal
 )
 {
-    float NdotV = abs(dot(normal, viewDir)) + EPSILON;
-    float NdotL = abs(dot(normal, lightDir)) + EPSILON;
-    float NdotH = abs(dot(normal, halfway)) + EPSILON;
-    float LdotH = abs(dot(lightDir, halfway)) + EPSILON;
+    float3 halfway = normalize(viewDir + lightDir);
+    
+    float NdotV = saturate(dot(normal, viewDir));
+    float NdotL = saturate(dot(normal, lightDir));
+    float NdotH = saturate(dot(normal, halfway));
+    //float LdotH = saturate(dot(lightDir, halfway));
+    float VdotH = saturate(dot(viewDir, halfway));
+    
+    #define REFLECTANCE 0.04 // 0.16 * 0.5^2
+    const float3 f0 = lerp(REFLECTANCE, baseColor, metalness);
+    float3 F = F_Schlick(VdotH, f0);
+    
     
     // input roughness param is a perceptual roughness
     // alpha is a more physically accurate value
-    float alpha = roughness * roughness;
+    // clamp to 0.045 to reduce specular aliasing
+    float alpha = clamp(roughness * roughness, 0.045f, 1.f);
     
     float D = D_GGX(NdotH, alpha);
     float V = V_SmithGGXCorrelated(NdotV, NdotL, alpha);
     
-    float reflectance = 0.5f;
-    float3 f0 = 0.16f * reflectance * reflectance * (1.f - metalness) + baseColor * metalness;
-    float3 F = F_Schlick(LdotH, f0);
+    float3 specular = (D * V) * F;
     
-    return (D * V) * F;
-}
-
-// lambertian brdf
-float3 diffuseBRDF(float3 color)
-{
-    return (1.f / PI) * color;
+    float3 diffuseColor = lerp(baseColor, 0.f, metalness);
+    float3 diffuse = lambert(diffuseColor) * (1.f - F);
+    
+    float3 radiance = (diffuse + specular) * NdotL * globalSceneData.lightColor;
+    
+    return radiance;
 }
 
 PixelOutput simplePS(VertexOutput input)
@@ -179,21 +226,11 @@ PixelOutput simplePS(VertexOutput input)
     float3 viewDirection = normalize(globalSceneData.viewPosition - input.positionWorld);
     float3 lightDirection = normalize(globalSceneData.lightDirection);
     
-    float3x3 TBN = float3x3(input.tangent, input.binormal, input.normal);
-    float3 normal = normalSample.xyz * float3(2.f, 2.f, 2.f) - float3(1.f, 1.f, 1.f);
+    float3 normal = perturbNormal(normalize(input.normal), input.positionWorld, input.uv);
     
-    normal = normalize(mul(TBN, normal));
+    float3 radiance = brdf(baseColor.rgb, roughness, metalness, viewDirection, lightDirection, normal);
     
-    float3 halfway = normalize(viewDirection + lightDirection);
-    
-    float3 diffuseColor = lerp(baseColor.rgb, 0.f, metalness);
-    float3 diffuse = diffuseBRDF(diffuseColor);
-    float3 specular = specularBRDF(
-        baseColor.rgb, roughness, metalness,
-        viewDirection, lightDirection, normal, halfway
-    );
-    
-    result.color = float4(diffuse + specular, 1.f);
+    result.color = float4(radiance, 1.f);
     return result;
 }
 
@@ -216,7 +253,7 @@ PixelOutput metalDebugPS(VertexOutput input)
     PixelOutput result;
     
     float4 metalRoughSample = metalRoughTex.Sample(metalRoughSampler, input.uv);
-    float metalFactor = metalRoughSample.b * pushConstants.material.metalnessFactor;
+    float metalFactor = metalRoughSample.b* pushConstants.material.metalnessFactor;
     
     result.color = float4(metalFactor, metalFactor, metalFactor, 1.f);
     return result;
@@ -241,14 +278,31 @@ PixelOutput roughDebugPS(VertexOutput input)
 PixelOutput normalDebugPS(VertexOutput input)
 {
     PixelOutput result;
+
+    // Everything in world space
+    float3 normalWS = perturbNormal(normalize(input.normal), input.positionWorld, input.uv);
+
+    // visualize [-1,1] -> [0,1]
+    result.color = float4(normalWS * 0.5f + 0.5f, 1.0f);
+    return result;
+}
+
+// This shader displays the vertex normal of the draw
+// used for debugging
+PixelOutput vertNormalDebugPS(VertexOutput input)
+{
+    PixelOutput result;
     
-    float4 normalSample = normalTex.Sample(normalSampler, input.uv);
+    result.color = float4(input.normal.xyz, 1.f);
+    return result;
+}
+
+// This shader displays the UV coordinates of the draw
+// used for debugging
+PixelOutput uvDebugPS(VertexOutput input)
+{
+    PixelOutput result;
     
-    float3x3 TBN = float3x3(input.tangent, input.binormal, input.normal);
-    float3 normal = normalSample.xyz * float3(2.f, 2.f, 2.f) - float3(1.f, 1.f, 1.f);
-    
-    normal = normalize(mul(TBN, normal));
-    
-    result.color = float4(normal.x, normal.y, normal.z, 1.f);
+    result.color = float4(input.uv.xy, 0.f, 1.f);
     return result;
 }

@@ -34,9 +34,9 @@ VkVertexInputBindingDescription Vertex::getInputBindingDescription()
     return bindingDesc;
 }
 
-std::array<VkVertexInputAttributeDescription, 5> Vertex::getInputAttributeDescription()
+std::array<VkVertexInputAttributeDescription, 4> Vertex::getInputAttributeDescription()
 {
-    std::array<VkVertexInputAttributeDescription, 5> attribDesc;
+    std::array<VkVertexInputAttributeDescription, 4> attribDesc;
 
     // position attrib
     attribDesc[0].location = 0;
@@ -50,23 +50,17 @@ std::array<VkVertexInputAttributeDescription, 5> Vertex::getInputAttributeDescri
     attribDesc[1].format = VK_FORMAT_R32G32B32_SFLOAT;
     attribDesc[1].offset = offsetof(Vertex, normal);
 
-    // tangent attrib
+    // uv attrib
     attribDesc[2].location = 2;
     attribDesc[2].binding = 0;
-    attribDesc[2].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    attribDesc[2].offset = offsetof(Vertex, tangent);
-
-    // uv attrib
-    attribDesc[3].location = 3;
-    attribDesc[3].binding = 0;
-    attribDesc[3].format = VK_FORMAT_R32G32_SFLOAT;
-    attribDesc[3].offset = offsetof(Vertex, uv);
+    attribDesc[2].format = VK_FORMAT_R32G32_SFLOAT;
+    attribDesc[2].offset = offsetof(Vertex, uv);
 
     // color attrib
-    attribDesc[4].location = 4;
-    attribDesc[4].binding = 0;
-    attribDesc[4].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    attribDesc[4].offset = offsetof(Vertex, color);
+    attribDesc[3].location = 3;
+    attribDesc[3].binding = 0;
+    attribDesc[3].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attribDesc[3].offset = offsetof(Vertex, color);
 
     return attribDesc;
 }
@@ -782,7 +776,6 @@ LoadedGltf::VertexBufferDesc LoadedGltf::loadVertexBuffer(const cgltf_primitive&
 
     std::vector<float> positionData;
     std::vector<float> normalData;
-    std::vector<float> tangentData;
     std::vector<float> uvData;
     std::vector<float> colorData;
 
@@ -828,20 +821,23 @@ LoadedGltf::VertexBufferDesc LoadedGltf::loadVertexBuffer(const cgltf_primitive&
     }
 
     // tangent
-    bool hasTangent = false;
-    {
-        const cgltf_accessor* tangentAcc = cgltf_find_accessor(
-            &primitive, cgltf_attribute_type_tangent, 0
-        );
+    // Use cotangent frame calculation in pixel shader instead of precomputed values passed in as vertex input.
+    // This reduces vertex bandwidth, and helps protect against degenerate mesh assets. Also allows for more flexibility
+    // (useful for, ex. procedurally animated normals, etc)
+    //bool hasTangent = false;
+    //{
+    //    const cgltf_accessor* tangentAcc = cgltf_find_accessor(
+    //        &primitive, cgltf_attribute_type_tangent, 0
+    //    );
 
-        if (tangentAcc != nullptr)
-        {
-            hasTangent = true;
-            cgltf_size tangentCount = cgltf_accessor_unpack_floats(tangentAcc, nullptr, 0);
-            tangentData.resize(tangentCount);
-            cgltf_accessor_unpack_floats(tangentAcc, tangentData.data(), tangentCount);
-        }
-    }
+    //    if (tangentAcc != nullptr)
+    //    {
+    //        hasTangent = true;
+    //        cgltf_size tangentCount = cgltf_accessor_unpack_floats(tangentAcc, nullptr, 0);
+    //        tangentData.resize(tangentCount);
+    //        cgltf_accessor_unpack_floats(tangentAcc, tangentData.data(), tangentCount);
+    //    }
+    //}
 
     // uv
     bool hasUv = false;
@@ -888,10 +884,10 @@ LoadedGltf::VertexBufferDesc LoadedGltf::loadVertexBuffer(const cgltf_primitive&
             else
                 vertexData[i].normal = glm::vec3{ 0.f, 0.f, 1.f };
 
-            if (hasTangent)
-                vertexData[i].tangent = glm::make_vec4(&tangentData[4 * i]);
-            else
-                vertexData[i].tangent = glm::vec4{ 0.f, 0.f, 0.f, 1.f };
+            //if (hasTangent)
+            //    vertexData[i].tangent = glm::make_vec4(&tangentData[4 * i]);
+            //else
+            //    vertexData[i].tangent = glm::vec4{ 0.f, 0.f, 0.f, 1.f };
 
             if (hasUv)
                 vertexData[i].uv = glm::make_vec2(&uvData[2 * i]);

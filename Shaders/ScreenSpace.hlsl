@@ -58,11 +58,11 @@ PixelOutput toneMapPS(VertexOutput input)
     PixelOutput result;
     float3 hdrColor = hdrColorBuffer.Sample(hdrColorSampler, input.uv).rgb;
     
-    // exposure tone mapping
+    // exponential exposure tonemap
     float3 mapped = 1.f - exp(-hdrColor * pushConstants.exposure);
     
     // gamma correction
-    const float rcpGamma =  1.f / 2.2f;
+    const float rcpGamma = 1.f / 2.2f;
     mapped = pow(mapped, rcpGamma);
     
     result.color = float4(mapped, 1.f);

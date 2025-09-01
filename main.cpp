@@ -75,12 +75,16 @@ int main()
             {
                 // azimuth: 0 to 360 degrees - where 0 is the angle of north
                 // altitude: -90 to 90 degrees - where 0 is the angle of the horizon
-                static float azimuth = 0, altitude = 0;
+                static float azimuth = 0.f, altitude = 90.f;
                 bool setSunDir = ImGui::SliderFloat("Sun: Azimuth", &azimuth, 0.f, 360.f);
                 setSunDir |= ImGui::SliderFloat("Sun: Altitude", &altitude, -90.f, 90.f);
 
                 if (setSunDir)
                     renderEngine.setSunDirection(azimuth, altitude);
+
+                static float luminance = 1.f;
+                if (ImGui::SliderFloat("Sun: Luminance", &luminance, 0.f, 10.f))
+                    renderEngine.setSunLuminance(luminance);
             }
 
             if (ImGui::CollapsingHeader("Tone Mapping Settings"))
@@ -113,6 +117,10 @@ int main()
                     pipeline = PipelineType::RoughDebug;
                 if (ImGui::Selectable("NormalDebug", pipeline == PipelineType::NormalDebug))
                     pipeline = PipelineType::NormalDebug;
+                if (ImGui::Selectable("VertexNormalDebug", pipeline == PipelineType::VertexNormalDebug))
+                    pipeline = PipelineType::VertexNormalDebug;
+                if (ImGui::Selectable("UvDebug", pipeline == PipelineType::UvDebug))
+                    pipeline = PipelineType::UvDebug;
 
                 renderEngine.setActiveMainPassPipeline(pipeline);
             }
