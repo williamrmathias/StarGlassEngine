@@ -973,6 +973,9 @@ void RenderEngine::initScene()
     // load gltf
     std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/Sponza/Sponza.gltf");
     loadedGltf = std::make_unique<LoadedGltf>(this, gltfPath.string().c_str());
+
+    std::filesystem::path exrPath = std::filesystem::current_path() / std::filesystem::path("Assets/qwantani_noon_puresky_4k.hdr");
+    loadedGltf->loadHDRSkybox(exrPath.string().c_str());
 }
 
 struct Frustum

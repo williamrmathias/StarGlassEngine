@@ -138,6 +138,7 @@ struct MeshNode
 struct Scene
 {
     std::vector<MeshNode> nodes;
+    gfx::AllocatedImage skybox;
 };
 
 /*
@@ -147,6 +148,8 @@ class LoadedGltf
 {
 public:
     LoadedGltf(gfx::RenderEngine* renderEngine, std::string_view gltfPath);
+
+    void loadHDRSkybox(std::string_view exrPath);
 
     void cleanup();
 

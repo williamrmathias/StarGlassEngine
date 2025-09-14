@@ -299,11 +299,12 @@ static AssetId getImageId(const cgltf_image& image)
     return invalidAssetId;
 }
 
+template<typename T>
 struct ScopedSTBImage
 {
-    stbi_uc* data;
+    T* data;
 
-    stbi_uc* operator->() const { return data; }
+    T* operator->() const { return data; }
 
     ~ScopedSTBImage()
     {
@@ -321,7 +322,7 @@ void LoadedGltf::loadImages(std::span<cgltf_image> gltfImages)
 
     for (const cgltf_image& image : gltfImages)
     {
-        ScopedSTBImage imageData{ nullptr };
+        ScopedSTBImage<stbi_uc> imageData{ nullptr };
         VkDeviceSize imageDataSize = 0;
         int width, height, nChannels;
 
@@ -1149,6 +1150,85 @@ MeshNode LoadedGltf::createMeshNode(const cgltf_mesh& mesh, const glm::mat4& tra
     return newMeshNode;
 }
 
+static uint32_t loadAsUint32(unsigned char* byte)
+{
+    uint32_t value;
+    std::memcpy(&value, byte, sizeof(uint32_t));
+    return value;
+}
+
+void LoadedGltf::loadHDRSkybox(std::string_view exrPath)
+{
+    ScopedSTBImage<float> imageData{ nullptr };
+    VkDeviceSize imageDataSize = 0;
+    int width, height, nChannels;
+
+    // Don't allow alpha skyboxes (yet)
+    imageData.data = stbi_loadf(exrPath.data(), &width, &height, &nChannels, STBI_rgb_alpha);
+
+    if (!imageData.data)
+    {
+        // use error fallback image
+        SDL_LogError(0, "GLTF load error: input skybox couldn't load: %s", exrPath.data());
+        std::abort();
+    }
+
+    // stbi will always load hdris as fp32. We must convert to fp16 here
+    uint16_t* bufferFP16 = reinterpret_cast<uint16_t*>(SDL_malloc(width * height * STBI_rgb_alpha * sizeof(uint16_t)));
+    for (int y = 0; y < height; y++)
+    {
+        for (int x = 0; x < width; x++)
+        {
+            int idx = STBI_rgb_alpha * (y * width + x);
+            bufferFP16[idx + 0] = util::float_to_half(imageData.data[idx + 0]);
+            bufferFP16[idx + 1] = util::float_to_half(imageData.data[idx + 1]);
+            bufferFP16[idx + 2] = util::float_to_half(imageData.data[idx + 2]);
+            bufferFP16[idx + 3] = util::float_to_half(imageData.data[idx + 3]);
+        }
+    }
+
+    imageDataSize = static_cast<VkDeviceSize>(width * height * STBI_rgb_alpha * sizeof(uint16_t));
+    gfx::Device* device = engine->device.get();
+
+    gfx::AllocatedBuffer stagingBuffer = gfx::createAllocatedBuffer(
+        device, imageDataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+    );
+
+    gfx::writeToAllocatedBuffer(device, bufferFP16, imageDataSize, stagingBuffer);
+
+    scene.skybox = gfx::createAllocatedImage(
+        device,
+        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        VK_FORMAT_R16G16B16A16_SFLOAT, VkExtent2D{ static_cast<uint32_t>(width), static_cast<uint32_t>(height) },
+        /*useMips*/false
+    );
+
+    VkImageSubresourceLayers subresource{
+        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .mipLevel = 0,
+        .baseArrayLayer = 0,
+        .layerCount = 1
+    };
+
+    VkCommandBuffer cmd = engine->startImmediateCommands();
+    gfx::copyBufferToImage(
+        cmd,
+        stagingBuffer, scene.skybox,
+        VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_ASPECT_COLOR_BIT
+    );
+    gfx::transitionImageLayoutCoarse(
+        cmd, scene.skybox.image,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT
+    );
+    engine->endAndSubmitImmediateCommands();
+
+    gfx::destroyAllocatedBuffer(device, stagingBuffer);
+    SDL_free(bufferFP16);
+}
+
 void LoadedGltf::loadScene(const cgltf_scene& gltfScene)
 {
     Scene& newScene = scene;
@@ -1284,4 +1364,5 @@ void LoadedGltf::cleanup()
     }
 
     scene.nodes.clear();
+    gfx::destroyAllocatedImage(engine->device.get(), scene.skybox);
 }
