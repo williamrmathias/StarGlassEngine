@@ -8,6 +8,8 @@
 namespace util 
 {
 
+constexpr float kMaxFP16 = 65504.f;
+
 uint64_t fastHash(const void* data, size_t size)
 {
     const uint8_t* bytes = static_cast<const uint8_t*>(data);

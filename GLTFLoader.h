@@ -43,6 +43,9 @@ static const uint64_t defaultHandle = 0;
 static const uint64_t errorHandle = 1;
 static const uint64_t defaultNormalMapHandle = 1;
 
+constexpr uint32_t kCubeMapDimension = 1024;
+constexpr uint32_t kIrradianceMapDimension = 64;
+
 struct Texture
 {
     ImageHandle image;
@@ -135,10 +138,29 @@ struct MeshNode
     glm::mat4 transform;
 };
 
+struct Skybox
+{
+    gfx::AllocatedImage cubemap;
+    VkImageView view;
+    VkDescriptorSet descriptorSet;
+
+    void cleanup(gfx::Device* device);
+};
+
+struct IrradianceMap
+{
+    gfx::AllocatedImage cubemap;
+    VkImageView view;
+    VkDescriptorSet descriptorSet;
+
+    void cleanup(gfx::Device* device);
+};
+
 struct Scene
 {
     std::vector<MeshNode> nodes;
-    gfx::AllocatedImage skybox;
+    Skybox skybox;
+    IrradianceMap irradianceMap;
 };
 
 /*
