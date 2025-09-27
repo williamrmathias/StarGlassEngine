@@ -82,7 +82,7 @@ int main()
                 if (setSunDir)
                     renderEngine.setSunDirection(azimuth, altitude);
 
-                static float luminance = 1.f;
+                static float luminance = 5.f;
                 if (ImGui::SliderFloat("Sun: Luminance", &luminance, 0.f, 10.f))
                     renderEngine.setSunLuminance(luminance);
             }

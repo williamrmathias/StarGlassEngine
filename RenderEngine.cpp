@@ -1113,13 +1113,13 @@ void RenderEngine::initScene()
     };
 
     setSunDirection(0.f, 90.f);
-    setSunLuminance(1.f);
+    setSunLuminance(5.f);
 
     // load scene
-    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/Sponza/Sponza.gltf");
+    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/Bistro.glb");
     loadedGltf = std::make_unique<LoadedGltf>(this, gltfPath.string().c_str());
 
-    std::filesystem::path hdriPath = std::filesystem::current_path() / std::filesystem::path("Assets/shanghai_bund_4k.hdr");
+    std::filesystem::path hdriPath = std::filesystem::current_path() / std::filesystem::path("Assets/qwantani_noon_puresky_4k.hdr");
     loadedGltf->loadHDRSkybox(hdriPath.string().c_str());
 }
 

@@ -1163,6 +1163,7 @@ struct Equirect
     }
 };
 
+constexpr float kMaxLuminance = 10.f;
 void LoadedGltf::loadHDRSkybox(std::string_view exrPath)
 {
     stbi_set_flip_vertically_on_load(true);
@@ -1190,10 +1191,10 @@ void LoadedGltf::loadHDRSkybox(std::string_view exrPath)
         for (int x = 0; x < width; x++)
         {
             int idx = STBI_rgb_alpha * (y * width + x);
-            bufferFP16[idx + 0] = util::float_to_half(std::min(imageData.data[idx + 0], util::kMaxFP16));
-            bufferFP16[idx + 1] = util::float_to_half(std::min(imageData.data[idx + 1], util::kMaxFP16));
-            bufferFP16[idx + 2] = util::float_to_half(std::min(imageData.data[idx + 2], util::kMaxFP16));
-            bufferFP16[idx + 3] = util::float_to_half(std::min(imageData.data[idx + 3], util::kMaxFP16));
+            bufferFP16[idx + 0] = util::float_to_half(std::min(imageData.data[idx + 0], kMaxLuminance));
+            bufferFP16[idx + 1] = util::float_to_half(std::min(imageData.data[idx + 1], kMaxLuminance));
+            bufferFP16[idx + 2] = util::float_to_half(std::min(imageData.data[idx + 2], kMaxLuminance));
+            bufferFP16[idx + 3] = util::float_to_half(std::min(imageData.data[idx + 3], kMaxLuminance));
         }
     }
 
