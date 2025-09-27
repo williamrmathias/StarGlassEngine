@@ -21,5 +21,14 @@
     <FxCompile Include="ScreenSpace.hlsl">
       <Filter>Source Files</Filter>
     </FxCompile>
+    <FxCompile Include="Skybox.hlsl">
+      <Filter>Source Files</Filter>
+    </FxCompile>
+    <FxCompile Include="Sky.hlsl">
+      <Filter>Source Files</Filter>
+    </FxCompile>
+    <FxCompile Include="IrradianceConvolution.hlsl">
+      <Filter>Source Files</Filter>
+    </FxCompile>
   </ItemGroup>
 </Project>

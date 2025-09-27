@@ -48,6 +48,7 @@ static const uint32_t NUM_MATERIALS_MAX = 1000;
 
 struct GlobalSceneData
 {
+    glm::mat4 view;
     glm::mat4 viewproj;
 
     glm::vec3 viewPosition;
@@ -76,6 +77,13 @@ struct ScreenSpacePushConstants
     float padding[31];
 };
 
+// must be 128 bytes
+struct SkyboxPushConstants
+{
+    glm::mat4 viewproj;
+    float padding[16];
+};
+
 class RenderEngine
 {
 public:
@@ -90,12 +98,15 @@ public:
     AllocatedImage depthImage;
     VkImageView depthView;
 
+    AllocatedImage skybox;
+
     VkSampler screenSpaceSampler;
 
     VkDescriptorPool globalDescriptorPool;
     VkDescriptorSetLayout globalSceneDataLayout;
     VkDescriptorSetLayout materialLayout;
     VkDescriptorSetLayout screenSpaceLayout;
+    VkDescriptorSetLayout cubemapLayout;
 
     struct FrameData
     {
@@ -137,7 +148,7 @@ public:
     Pipeline activePipeline;
     Pipeline graphicsPipeline;
 
-    // debug pipelines
+    // debug material pipelines
     Pipeline baseColorPipeline;
     Pipeline metalPipeline;
     Pipeline roughPipeline;
@@ -148,6 +159,10 @@ public:
     Pipeline activeSSPipeline;
     Pipeline toneMapPipeline;
     Pipeline passThroughPipeline;
+
+    Pipeline skyboxPipeline;
+    Pipeline irradiancePipeline;
+    Pipeline skyPipeline;
 
     void init(SDL_Window* window);
     void render();
@@ -163,6 +178,9 @@ public:
 
     VkCommandBuffer startImmediateCommands();
     void endAndSubmitImmediateCommands();
+
+    void renderSkyboxFace(VkCommandBuffer cmd, VkImageView colorAttachView, VkDescriptorSet hdrEquirecDescriptor, glm::mat4 viewproj, uint32_t renderExtent) const;
+    void renderIrradianceMapFace(VkCommandBuffer cmd, VkImageView colorAttachView, VkDescriptorSet skyboxDescriptor, glm::mat4 viewproj, uint32_t renderExtent) const;
 
 private:
     GlobalSceneData globalSceneData;
@@ -181,11 +199,15 @@ private:
     void initFrameData();
     void initGraphicsPipelines();
     void initScreenSpacePipelines();
+    void initSkyboxPipeline();
+    void initIrradianceConvolutionPipeline();
+    void initSkyPipeline();
     void initImGui(SDL_Window* window);
     void initScene();
 
     void drawScene(VkCommandBuffer cmd);
 
+    void renderSky(VkCommandBuffer cmd, VkImageView colorAttachView, VkImageView depthAttachView, VkExtent2D renderExtent);
     void renderPostFX(VkCommandBuffer cmd, FrameData& frame, VkImageView colorAttachView, VkExtent2D renderExtent);
     void renderImGui(VkCommandBuffer cmd, VkImageView colorAttachView, VkExtent2D renderExtent);
 

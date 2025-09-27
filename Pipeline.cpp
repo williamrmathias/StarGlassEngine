@@ -195,6 +195,11 @@ void GraphicsPipelineBuilder::setDepthMode(VkBool32 depthTestEnable, VkBool32 de
     depthStencilInfo.depthWriteEnable = depthWriteEnable;
 }
 
+void GraphicsPipelineBuilder::setDepthFunc(VkCompareOp func)
+{
+    depthStencilInfo.depthCompareOp = func;
+}
+
 void GraphicsPipelineBuilder::disableBlendMode()
 {
     std::vector<VkBool32> blendModes(renderInfo.colorAttachmentCount, VK_FALSE);

@@ -53,6 +53,9 @@ public:
     void setSampleCount(VkSampleCountFlagBits sampleCount);
 
     void setDepthMode(VkBool32 depthTestEnable, VkBool32 depthWriteEnable);
+    void setDepthFunc(VkCompareOp func);
+
+    void setCullMode(VkCullModeFlags cullMode) { rasterInfo.cullMode = cullMode; }
 
     void disableBlendMode();
     void setBlendMode(std::span<VkBool32> blendEnable);
