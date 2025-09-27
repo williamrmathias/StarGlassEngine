@@ -45,6 +45,7 @@ static const uint64_t defaultNormalMapHandle = 1;
 
 constexpr uint32_t kCubeMapDimension = 1024;
 constexpr uint32_t kIrradianceMapDimension = 64;
+constexpr uint32_t kPrefilteredEnvMapBaseDimension = 128;
 
 struct Texture
 {
@@ -138,18 +139,9 @@ struct MeshNode
     glm::mat4 transform;
 };
 
-struct Skybox
+struct CubeMap
 {
-    gfx::AllocatedImage cubemap;
-    VkImageView view;
-    VkDescriptorSet descriptorSet;
-
-    void cleanup(gfx::Device* device);
-};
-
-struct IrradianceMap
-{
-    gfx::AllocatedImage cubemap;
+    gfx::AllocatedImage image;
     VkImageView view;
     VkDescriptorSet descriptorSet;
 
@@ -159,8 +151,9 @@ struct IrradianceMap
 struct Scene
 {
     std::vector<MeshNode> nodes;
-    Skybox skybox;
-    IrradianceMap irradianceMap;
+    CubeMap skybox;
+    CubeMap irradianceMap;
+    CubeMap prefilteredEnvMap;
 };
 
 /*

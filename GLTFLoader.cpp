@@ -1164,23 +1164,23 @@ struct Equirect
 };
 
 constexpr float kMaxLuminance = 10.f;
-void LoadedGltf::loadHDRSkybox(std::string_view exrPath)
+static Equirect loadEquirect(gfx::RenderEngine* engine, std::string_view hdriPath)
 {
     stbi_set_flip_vertically_on_load(true);
 
-    Equirect equirect;
+    Equirect result;
 
     ScopedSTBImage<float> imageData{ nullptr };
     VkDeviceSize imageDataSize = 0;
     int width, height, nChannels;
 
     // Don't allow alpha skyboxes (yet)
-    imageData.data = stbi_loadf(exrPath.data(), &width, &height, &nChannels, STBI_rgb_alpha);
+    imageData.data = stbi_loadf(hdriPath.data(), &width, &height, &nChannels, STBI_rgb_alpha);
 
     if (!imageData.data)
     {
         // use error fallback image
-        SDL_LogError(0, "GLTF load error: input skybox couldn't load: %s", exrPath.data());
+        SDL_LogError(0, "GLTF load error: input skybox couldn't load: %s", hdriPath.data());
         std::abort();
     }
 
@@ -1209,7 +1209,7 @@ void LoadedGltf::loadHDRSkybox(std::string_view exrPath)
     gfx::writeToAllocatedBuffer(device, bufferFP16, imageDataSize, stagingBuffer);
     SDL_free(bufferFP16);
 
-    equirect.hdrEquirec = gfx::createAllocatedImage(
+    result.hdrEquirec = gfx::createAllocatedImage(
         device,
         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
         VK_FORMAT_R16G16B16A16_SFLOAT, VkExtent2D{ static_cast<uint32_t>(width), static_cast<uint32_t>(height) },
@@ -1226,12 +1226,12 @@ void LoadedGltf::loadHDRSkybox(std::string_view exrPath)
     VkCommandBuffer cmd = engine->startImmediateCommands();
     gfx::copyBufferToImage(
         cmd,
-        stagingBuffer, equirect.hdrEquirec,
+        stagingBuffer, result.hdrEquirec,
         VK_IMAGE_LAYOUT_UNDEFINED,
         VK_IMAGE_ASPECT_COLOR_BIT
     );
     gfx::transitionImageLayoutCoarse(
-        cmd, equirect.hdrEquirec.image,
+        cmd, result.hdrEquirec.image,
         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_IMAGE_ASPECT_COLOR_BIT
     );
@@ -1239,22 +1239,141 @@ void LoadedGltf::loadHDRSkybox(std::string_view exrPath)
 
     gfx::destroyAllocatedBuffer(device, stagingBuffer);
 
-    equirect.hdrEquirecView = gfx::createImageView(device, equirect.hdrEquirec.image, equirect.hdrEquirec.format, VK_IMAGE_ASPECT_COLOR_BIT);
+    result.hdrEquirecView = gfx::createImageView(device, result.hdrEquirec.image, result.hdrEquirec.format, VK_IMAGE_ASPECT_COLOR_BIT);
 
+    stbi_set_flip_vertically_on_load(false);
+
+    return result;
+}
+
+static void generateSkybox(
+    gfx::RenderEngine* engine,
+    const Equirect& equirect,
+    const CubeMap& skybox, 
+    glm::mat4 faceProj, glm::mat4 faceViews[6]
+)
+{
+    gfx::Device* device = engine->device.get();
+
+    VkCommandBuffer cmd = engine->startImmediateCommands();
+
+    // render into cubemap
+
+    gfx::transitionImageLayoutCoarse(
+        cmd, skybox.image.image,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT);
+
+    for (uint32_t i = 0; i < 6; i++)
+    {
+        VkImageView faceView = gfx::createImageView(
+            device, skybox.image.image, skybox.image.format, VK_IMAGE_ASPECT_COLOR_BIT, i);
+
+        engine->renderSkyboxFace(cmd, faceView, equirect.hdrEquirecDescriptor, faceProj * faceViews[i], kCubeMapDimension);
+
+        vkDestroyImageView(device->device, faceView, nullptr);
+    }
+
+    gfx::transitionImageLayoutCoarse(
+        cmd, skybox.image.image,
+        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT);
+
+    engine->endAndSubmitImmediateCommands();
+}
+
+static void generateIrradianceMap(
+    gfx::RenderEngine* engine,
+    const CubeMap& skybox,
+    const CubeMap& irradianceMap,
+    glm::mat4 faceProj, glm::mat4 faceViews[6]
+)
+{
+    gfx::Device* device = engine->device.get();
+
+    VkCommandBuffer cmd = engine->startImmediateCommands();
+
+    // convolve into cubemap
+
+    gfx::transitionImageLayoutCoarse(
+        cmd, irradianceMap.image.image,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT);
+
+    for (uint32_t i = 0; i < 6; i++)
+    {
+        VkImageView faceView = gfx::createImageView(
+            device, irradianceMap.image.image, irradianceMap.image.format, VK_IMAGE_ASPECT_COLOR_BIT, i);
+
+        engine->renderIrradianceMapFace(cmd, faceView, skybox.descriptorSet, faceProj * faceViews[i], kIrradianceMapDimension);
+
+        vkDestroyImageView(device->device, faceView, nullptr);
+    }
+
+    gfx::transitionImageLayoutCoarse(
+        cmd, irradianceMap.image.image,
+        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT);
+
+    engine->endAndSubmitImmediateCommands();
+}
+
+static void generatePrefilteredEnvMap(
+    gfx::RenderEngine* engine,
+    const CubeMap& skybox,
+    const CubeMap& prefilteredEnvMap,
+    glm::mat4 faceProj, glm::mat4 faceViews[6]
+)
+{
+    gfx::Device* device = engine->device.get();
+
+    VkCommandBuffer cmd = engine->startImmediateCommands();
+
+    // prefilter into envmap
+
+    gfx::transitionImageLayoutCoarse(
+        cmd, prefilteredEnvMap.image.image,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT);
+
+    for (uint32_t i = 0; i < 6; i++)
+    {
+        VkImageView faceView = gfx::createImageView(
+            device, prefilteredEnvMap.image.image, prefilteredEnvMap.image.format, VK_IMAGE_ASPECT_COLOR_BIT, i);
+
+        engine->renderIrradianceMapFace(cmd, faceView, skybox.descriptorSet, faceProj * faceViews[i], kPrefilteredEnvMapBaseDimension);
+
+        vkDestroyImageView(device->device, faceView, nullptr);
+    }
+
+    gfx::transitionImageLayoutCoarse(
+        cmd, prefilteredEnvMap.image.image,
+        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT);
+
+    engine->endAndSubmitImmediateCommands();
+}
+
+void LoadedGltf::loadHDRSkybox(std::string_view hdriPath)
+{
     // allocate cubemap descriptor sets
-    VkDescriptorSetLayout cubemapLayouts[2] = { engine->cubemapLayout, engine->cubemapLayout };
+    std::array<VkDescriptorSetLayout, 3> cubemapLayouts;
+    cubemapLayouts.fill(engine->cubemapLayout);
+
     VkDescriptorSetAllocateInfo allocInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
         .pNext = nullptr,
         .descriptorPool = engine->globalDescriptorPool,
-        .descriptorSetCount = 2,
-        .pSetLayouts = cubemapLayouts
+        .descriptorSetCount = (uint32_t)cubemapLayouts.size(),
+        .pSetLayouts = cubemapLayouts.data()
     };
 
-    VkDescriptorSet descriptorSets[2];
-    VK_Check(vkAllocateDescriptorSets(engine->device->device, &allocInfo, descriptorSets));
+    std::array<VkDescriptorSet, 3> cubemapDescriptors;
+    VK_Check(vkAllocateDescriptorSets(engine->device->device, &allocInfo, cubemapDescriptors.data()));
 
-    equirect.hdrEquirecDescriptor = descriptorSets[0];
+    Equirect equirect = loadEquirect(engine, hdriPath);
+
+    equirect.hdrEquirecDescriptor = cubemapDescriptors[0];
 
     // write to descriptor set
     VkDescriptorImageInfo hdrEquirecInfo{
@@ -1282,9 +1401,12 @@ void LoadedGltf::loadHDRSkybox(std::string_view exrPath)
         0, nullptr
     );
 
-    // create skybox + irradiance map
-    Skybox skybox;
-    IrradianceMap irradianceMap;
+    // create scene cubemaps
+    gfx::Device* device = engine->device.get();
+
+    CubeMap skybox;
+    CubeMap irradianceMap;
+    CubeMap prefilteredEnvMap;
 
     VkFormat colorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 
@@ -1298,16 +1420,22 @@ void LoadedGltf::loadHDRSkybox(std::string_view exrPath)
         std::abort();
     }
 
-    skybox.cubemap = gfx::createAllocatedCubemapImage(
+    skybox.image = gfx::createAllocatedCubemapImage(
         device,
         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
         colorFormat, kCubeMapDimension, /*useMips*/false
     );
 
-    irradianceMap.cubemap = gfx::createAllocatedCubemapImage(
+    irradianceMap.image = gfx::createAllocatedCubemapImage(
         device,
         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
         colorFormat, kIrradianceMapDimension, /*useMips*/false
+    );
+
+    prefilteredEnvMap.image = gfx::createAllocatedCubemapImage(
+        device,
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        colorFormat, kPrefilteredEnvMapBaseDimension, /*useMips*/true
     );
 
     glm::mat4 faceProjection = glm::perspective(glm::radians(90.0f), 1.0f, 0.1f, 10.0f);
@@ -1321,36 +1449,12 @@ void LoadedGltf::loadHDRSkybox(std::string_view exrPath)
        glm::lookAt(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f,  0.0f, -1.0f), glm::vec3(0.0f, -1.0f,  0.0f))
     };
 
-    cmd = engine->startImmediateCommands();
-
-    // render into cubemap
-
-    gfx::transitionImageLayoutCoarse(
-        cmd, skybox.cubemap.image,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 
-        VK_IMAGE_ASPECT_COLOR_BIT);
-
-    for (uint32_t i = 0; i < 6; i++)
-    {
-        VkImageView faceView = gfx::createImageView(
-            device, skybox.cubemap.image, skybox.cubemap.format, VK_IMAGE_ASPECT_COLOR_BIT, i);
-
-        engine->renderSkyboxFace(cmd, faceView, equirect.hdrEquirecDescriptor, faceProjection * faceViews[i], kCubeMapDimension);
-
-        vkDestroyImageView(device->device, faceView, nullptr);
-    }
-
-    gfx::transitionImageLayoutCoarse(
-        cmd, skybox.cubemap.image,
-        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_IMAGE_ASPECT_COLOR_BIT);
-
-    engine->endAndSubmitImmediateCommands();
+    generateSkybox(engine, equirect, skybox, faceProjection, faceViews);
 
     // write over descriptor used for equirec
-    skybox.view = gfx::createCubemapView(device, skybox.cubemap.image, skybox.cubemap.format, VK_IMAGE_ASPECT_COLOR_BIT);
+    skybox.view = gfx::createCubemapView(device, skybox.image.image, skybox.image.format, VK_IMAGE_ASPECT_COLOR_BIT);
 
-    skybox.descriptorSet = descriptorSets[0];
+    skybox.descriptorSet = cubemapDescriptors[0];
     VkDescriptorImageInfo skyboxInfo{
         .sampler = samplers[defaultHandle],
         .imageView = skybox.view,
@@ -1376,35 +1480,12 @@ void LoadedGltf::loadHDRSkybox(std::string_view exrPath)
         0, nullptr
     );
 
-    cmd = engine->startImmediateCommands();
-    // convolve into irradiance map
-
-    gfx::transitionImageLayoutCoarse(
-        cmd, irradianceMap.cubemap.image,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        VK_IMAGE_ASPECT_COLOR_BIT);
-
-    for (uint32_t i = 0; i < 6; i++)
-    {
-        VkImageView faceView = gfx::createImageView(
-            device, irradianceMap.cubemap.image, irradianceMap.cubemap.format, VK_IMAGE_ASPECT_COLOR_BIT, i);
-
-        engine->renderIrradianceMapFace(cmd, faceView, skybox.descriptorSet, faceProjection * faceViews[i], kIrradianceMapDimension);
-
-        vkDestroyImageView(device->device, faceView, nullptr);
-    }
-
-    gfx::transitionImageLayoutCoarse(
-        cmd, irradianceMap.cubemap.image,
-        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_IMAGE_ASPECT_COLOR_BIT);
-
-    engine->endAndSubmitImmediateCommands();
+    generateIrradianceMap(engine, skybox, irradianceMap, faceProjection, faceViews);
 
     // write over descriptor used for equirec
-    irradianceMap.view = gfx::createCubemapView(device, irradianceMap.cubemap.image, irradianceMap.cubemap.format, VK_IMAGE_ASPECT_COLOR_BIT);
+    irradianceMap.view = gfx::createCubemapView(device, irradianceMap.image.image, irradianceMap.image.format, VK_IMAGE_ASPECT_COLOR_BIT);
 
-    irradianceMap.descriptorSet = descriptorSets[1];
+    irradianceMap.descriptorSet = cubemapDescriptors[1];
     VkDescriptorImageInfo irradianceInfo{
         .sampler = samplers[defaultHandle],
         .imageView = irradianceMap.view,
@@ -1433,8 +1514,6 @@ void LoadedGltf::loadHDRSkybox(std::string_view exrPath)
     scene.skybox = skybox;
     scene.irradianceMap = irradianceMap;
     equirect.cleanup(device);
-
-    stbi_set_flip_vertically_on_load(false);
 }
 
 void LoadedGltf::loadScene(const cgltf_scene& gltfScene)
@@ -1521,15 +1600,9 @@ void Texture::cleanup(gfx::Device* device)
     vkDestroyImageView(device->device, view, nullptr);
 }
 
-void Skybox::cleanup(gfx::Device* device)
+void CubeMap::cleanup(gfx::Device* device)
 {
-    gfx::destroyAllocatedImage(device, cubemap);
-    vkDestroyImageView(device->device, view, nullptr);
-}
-
-void IrradianceMap::cleanup(gfx::Device* device)
-{
-    gfx::destroyAllocatedImage(device, cubemap);
+    gfx::destroyAllocatedImage(device, image);
     vkDestroyImageView(device->device, view, nullptr);
 }
 
@@ -1586,4 +1659,5 @@ void LoadedGltf::cleanup()
     scene.nodes.clear();
     scene.skybox.cleanup(engine->device.get());
     scene.irradianceMap.cleanup(engine->device.get());
+    scene.prefilteredEnvMap.cleanup(engine->device.get());
 }

@@ -14,6 +14,9 @@ dxc.exe -T ps_6_0 -E skyPS -spirv -fspv-debug=vulkan-with-source -Fo Sky_skyPS.s
 dxc.exe -T vs_6_0 -E irradianceVS -spirv -fspv-debug=vulkan-with-source -Fo IrradianceConvolution_irradianceVS.spirv IrradianceConvolution.hlsl > IrradianceConvolution_irradianceVS.log 2>&1
 dxc.exe -T ps_6_0 -E irradiancePS -spirv -fspv-debug=vulkan-with-source -Fo IrradianceConvolution_irradiancePS.spirv IrradianceConvolution.hlsl > IrradianceConvolution_irradiancePS.log 2>&1
 
+dxc.exe -T vs_6_0 -E prefilterVS -spirv -fspv-debug=vulkan-with-source -Fo PrefilteredEnvMap_prefilterVS.spirv PrefilteredEnvMap.hlsl > PrefilteredEnvMap_prefilterVS.log 2>&1
+dxc.exe -T ps_6_0 -E prefilterPS -spirv -fspv-debug=vulkan-with-source -Fo PrefilteredEnvMap_prefilterPS.spirv PrefilteredEnvMap.hlsl > PrefilteredEnvMap_prefilterPS.log 2>&1
+
 dxc.exe -T ps_6_0 -E baseColorDebugPS -fspv-debug=vulkan-with-source -spirv -Fo baseColorDebugPS.spirv SimpleShader.hlsl > baseColorDebugPS.log 2>&1
 dxc.exe -T ps_6_0 -E metalDebugPS -fspv-debug=vulkan-with-source -spirv -Fo metalDebugPS.spirv SimpleShader.hlsl > metalDebugPS.log 2>&1
 dxc.exe -T ps_6_0 -E roughDebugPS -fspv-debug=vulkan-with-source -spirv -Fo roughDebugPS.spirv SimpleShader.hlsl > roughDebugPS.log 2>&1

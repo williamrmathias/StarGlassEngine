@@ -1244,7 +1244,7 @@ void RenderEngine::renderSky(VkCommandBuffer cmd, VkImageView colorAttachView, V
     //bind pipeline
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skyPipeline.pipeline);
 
-    Skybox& skybox = loadedGltf->scene.skybox;
+    CubeMap& skybox = loadedGltf->scene.skybox;
 
     // bind skybox
     vkCmdBindDescriptorSets(
