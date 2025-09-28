@@ -41,6 +41,7 @@ void RenderEngine::init(SDL_Window* window)
     initSkyboxPipeline();
     initIrradianceConvolutionPipeline();
     initPrefilteredEnvironmentPipeline();
+    initBrdfLutPipeline();
     initSkyPipeline();
 
     initImGui(window);
@@ -304,7 +305,7 @@ void RenderEngine::cleanup()
     vkDestroyDescriptorSetLayout(device->device, globalSceneDataLayout, nullptr);
     vkDestroyDescriptorSetLayout(device->device, materialLayout, nullptr);
     vkDestroyDescriptorSetLayout(device->device, screenSpaceLayout, nullptr);
-    vkDestroyDescriptorSetLayout(device->device, cubemapLayout, nullptr);
+    vkDestroyDescriptorSetLayout(device->device, environmentLayout, nullptr);
 
     {
         // pipelines
@@ -608,7 +609,7 @@ void RenderEngine::initDescriptorPool()
         .pBindings = &cubemapBinding
     };
 
-    VK_Check(vkCreateDescriptorSetLayout(device->device, &layoutInfo, nullptr, &cubemapLayout));
+    VK_Check(vkCreateDescriptorSetLayout(device->device, &layoutInfo, nullptr, &environmentLayout));
 
     // make descriptor pool
     std::array<VkDescriptorPoolSize, 4> poolSizes;
@@ -630,14 +631,14 @@ void RenderEngine::initDescriptorPool()
 
     poolSizes[3] = VkDescriptorPoolSize{
         .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .descriptorCount = 3 // 3 cubemaps - irradiance map, prefilter environment map, and skybox
+        .descriptorCount = 4 // skybox, irradiance map, prefiltered env map, brdf LUT
     };
 
     VkDescriptorPoolCreateInfo poolInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
-        .maxSets =  3 * NUM_MATERIALS_MAX + NUM_FRAMES + NUM_FRAMES + 3,
+        .maxSets =  3 * NUM_MATERIALS_MAX + NUM_FRAMES + NUM_FRAMES + 4,
         .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
         .pPoolSizes = poolSizes.data()
     };
@@ -834,7 +835,7 @@ void RenderEngine::initGraphicsPipelines()
         pipelineBuilder.setPushConstantSize(static_cast<uint32_t>(sizeof(PushConstants)));
 
         std::array<VkDescriptorSetLayout, 3> descriptorSetLayouts = {
-            globalSceneDataLayout, materialLayout, cubemapLayout // irradiance map
+            globalSceneDataLayout, materialLayout, environmentLayout // irradiance map
         };
         pipelineBuilder.setDescriptorSetLayouts(descriptorSetLayouts);
 
@@ -974,7 +975,7 @@ void RenderEngine::initSkyboxPipeline()
     // shader info
     pipelineBuilder.setShaderStages(vertShader, "skyboxVS", fragShader, "skyboxPS");
     pipelineBuilder.setPushConstantSize(static_cast<uint32_t>(sizeof(CubeMapPushConstants)));
-    pipelineBuilder.setDescriptorSetLayouts(std::span{ &cubemapLayout, 1 });
+    pipelineBuilder.setDescriptorSetLayouts(std::span{ &environmentLayout, 1 });
 
     // IA info
     // no vertex input!
@@ -1010,7 +1011,7 @@ void RenderEngine::initIrradianceConvolutionPipeline()
     // shader info
     pipelineBuilder.setShaderStages(vertShader, "irradianceVS", fragShader, "irradiancePS");
     pipelineBuilder.setPushConstantSize(static_cast<uint32_t>(sizeof(CubeMapPushConstants)));
-    pipelineBuilder.setDescriptorSetLayouts(std::span{ &cubemapLayout, 1 });
+    pipelineBuilder.setDescriptorSetLayouts(std::span{ &environmentLayout, 1 });
 
     // IA info
     // no vertex input!
@@ -1046,7 +1047,7 @@ void RenderEngine::initPrefilteredEnvironmentPipeline()
     // shader info
     pipelineBuilder.setShaderStages(vertShader, "prefilterVS", fragShader, "prefilterPS");
     pipelineBuilder.setPushConstantSize(static_cast<uint32_t>(sizeof(CubeMapPushConstants)));
-    pipelineBuilder.setDescriptorSetLayouts(std::span{ &cubemapLayout, 1 });
+    pipelineBuilder.setDescriptorSetLayouts(std::span{ &environmentLayout, 1 });
 
     // IA info
     // no vertex input!
@@ -1061,6 +1062,40 @@ void RenderEngine::initPrefilteredEnvironmentPipeline()
 
     // build pipeline
     prefilterEnvPipeline = pipelineBuilder.build(device.get());
+
+    vkDestroyShaderModule(device->device, fragShader, nullptr);
+    vkDestroyShaderModule(device->device, vertShader, nullptr);
+}
+
+void RenderEngine::initBrdfLutPipeline()
+{
+    GraphicsPipelineBuilder pipelineBuilder;
+
+    std::filesystem::path vertexShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/IntegrateBRDF_integrateBRDF_VS.spirv");
+    VkShaderModule vertShader = loadShaderModule(vertexShaderPath.string().c_str());
+
+    std::filesystem::path fragShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/IntegrateBRDF_integrateBRDF_PS.spirv");
+    VkShaderModule fragShader = loadShaderModule(fragShaderPath.string().c_str());
+
+    // render attachments
+    pipelineBuilder.setColorAttachmentFormats(std::span{ &kBrdfLutFormat, 1 });
+
+    // shader info
+    pipelineBuilder.setShaderStages(vertShader, "integrateBRDF_VS", fragShader, "integrateBRDF_PS");
+
+    // IA info
+    // no vertex input!
+    pipelineBuilder.setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+
+    // rasterization info
+    pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
+    pipelineBuilder.setSampleCount(VK_SAMPLE_COUNT_1_BIT);
+    pipelineBuilder.setDepthMode(VK_FALSE, VK_FALSE);
+    pipelineBuilder.setCullMode(0);
+    pipelineBuilder.disableBlendMode();
+
+    // build pipeline
+    brdfLutPipeline = pipelineBuilder.build(device.get());
 
     vkDestroyShaderModule(device->device, fragShader, nullptr);
     vkDestroyShaderModule(device->device, vertShader, nullptr);
@@ -1084,7 +1119,7 @@ void RenderEngine::initSkyPipeline()
     // shader info
     pipelineBuilder.setShaderStages(vertShader, "skyVS", fragShader, "skyPS");
     pipelineBuilder.setPushConstantSize(static_cast<uint32_t>(sizeof(CubeMapPushConstants)));
-    pipelineBuilder.setDescriptorSetLayouts(std::span{ &cubemapLayout, 1 });
+    pipelineBuilder.setDescriptorSetLayouts(std::span{ &environmentLayout, 1 });
 
     // IA info
     // no vertex input!
@@ -1545,6 +1580,63 @@ void RenderEngine::renderPrefilterEnvMapFace(
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
         sizeof(pushConstants), &pushConstants
     );
+
+    // begin rendering
+    VkRenderingAttachmentInfo colorAttachInfo{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+        .pNext = nullptr,
+        .imageView = colorAttachView,
+        .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .resolveMode = VK_RESOLVE_MODE_NONE,
+        .resolveImageView = VK_NULL_HANDLE,
+        .resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .clearValue = VkClearValue{.color = VkClearColorValue{0.f, 0.f, 0.f, 1.f} }
+    };
+
+    VkRenderingInfo renderInfo{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .renderArea = VkRect2D{ VkOffset2D{0, 0}, VkExtent2D{renderExtent, renderExtent}},
+        .layerCount = 1,
+        .viewMask = 0,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &colorAttachInfo,
+        .pDepthAttachment = nullptr,
+        .pStencilAttachment = nullptr
+    };
+
+    vkCmdBeginRendering(cmd, &renderInfo);
+
+    vkCmdDraw(cmd, 36, 1, 0, 0);
+
+    // end rendering
+    vkCmdEndRendering(cmd);
+}
+
+void RenderEngine::renderBrdfLUT(VkCommandBuffer cmd, VkImageView colorAttachView, uint32_t renderExtent) const
+{
+    //bind pipeline
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, brdfLutPipeline.pipeline);
+
+    // set dynamic viewport and scissor state
+    VkViewport viewport{
+        .x = 0.f,
+        .y = 0.f,
+        .width = static_cast<float>(renderExtent),
+        .height = static_cast<float>(renderExtent),
+        .minDepth = 0.f,
+        .maxDepth = 1.f
+    };
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor{
+        .offset = VkOffset2D{ 0, 0 },
+        .extent = VkExtent2D{renderExtent, renderExtent}
+    };
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     // begin rendering
     VkRenderingAttachmentInfo colorAttachInfo{

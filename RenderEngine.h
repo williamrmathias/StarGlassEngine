@@ -111,7 +111,7 @@ public:
     VkDescriptorSetLayout globalSceneDataLayout;
     VkDescriptorSetLayout materialLayout;
     VkDescriptorSetLayout screenSpaceLayout;
-    VkDescriptorSetLayout cubemapLayout;
+    VkDescriptorSetLayout environmentLayout;
 
     struct FrameData
     {
@@ -168,6 +168,7 @@ public:
     Pipeline skyboxPipeline;
     Pipeline irradiancePipeline;
     Pipeline prefilterEnvPipeline;
+    Pipeline brdfLutPipeline;
     Pipeline skyPipeline;
 
     void init(SDL_Window* window);
@@ -188,6 +189,7 @@ public:
     void renderSkyboxFace(VkCommandBuffer cmd, VkImageView colorAttachView, VkDescriptorSet hdrEquirecDescriptor, glm::mat4 viewproj, uint32_t renderExtent) const;
     void renderIrradianceMapFace(VkCommandBuffer cmd, VkImageView colorAttachView, VkDescriptorSet skyboxDescriptor, glm::mat4 viewproj, uint32_t renderExtent) const;
     void renderPrefilterEnvMapFace(VkCommandBuffer cmd, VkImageView colorAttachView, VkDescriptorSet skyboxDescriptor, glm::mat4 viewproj, uint32_t renderExtent, float roughness) const;
+    void renderBrdfLUT(VkCommandBuffer cmd, VkImageView colorAttachView, uint32_t renderExtent) const;
 
 private:
     GlobalSceneData globalSceneData;
@@ -209,6 +211,7 @@ private:
     void initSkyboxPipeline();
     void initIrradianceConvolutionPipeline();
     void initPrefilteredEnvironmentPipeline();
+    void initBrdfLutPipeline();
     void initSkyPipeline();
     void initImGui(SDL_Window* window);
     void initScene();
