@@ -43,6 +43,18 @@ TextureCube irradianceMap;
 [[vk::binding(0, 2)]]
 SamplerState irradianceMapSampler;
 
+[[vk::binding(0, 3)]]
+TextureCube prefilteredEnvMap;
+
+[[vk::binding(0, 3)]]
+SamplerState prefilteredEnvMapSampler;
+
+[[vk::binding(0, 4)]]
+Texture2D brdfLut;
+
+[[vk::binding(0, 4)]]
+SamplerState brdfLutSampler;
+
 struct MaterialConstants
 {
     float4 baseColorFactor;
@@ -171,9 +183,9 @@ float3 F_Schlick(float VdotH, float3 f0)
     return f0 + (1.f - f0) * pow(1.f - VdotH, 5.f);
 }
 
-float3 F_SchlickRough(float VdotH, float3 f0, float roughness)
+float3 F_SchlickRough(float NdotV, float3 f0, float roughness)
 {
-    return f0 + (max(1.f - roughness, f0) - f0) * pow(1.f - VdotH, 5.f);
+    return f0 + (max(1.f - roughness, f0) - f0) * pow(1.f - NdotV, 5.f);
 }
 
 // lambertian brdf
@@ -230,21 +242,33 @@ float3 brdf_IBL(
     float3 normal
 )
 {
-    float3 halfway = normalize(viewDir + lightDir);
-    float VdotH = saturate(dot(viewDir, halfway));
+    const float NdotV = saturate(dot(normal, viewDir));
     
     // input roughness param is a perceptual roughness
     // alpha is a more physically accurate value
     // clamp to 0.045 to reduce specular aliasing
-    float alpha = clamp(roughness * roughness, 0.045f, 1.f);
+    const float alpha = clamp(roughness * roughness, 0.045f, 1.f);
+    
+    float3 reflection = reflect(-viewDir, normal);
+    
+    float3 irradiance = irradianceMap.Sample(irradianceMapSampler, normal).rgb;
+    
+    // sync w/ LoadedGltf::generatePrefilteredEnvMap()
+    #define PREFILTERED_ENV_MIPS 9
+    float3 prefilteredColor = prefilteredEnvMap.SampleLevel(
+        prefilteredEnvMapSampler, reflection, alpha * PREFILTERED_ENV_MIPS).rgb;
+    
+    float2 envBRDF = brdfLut.Sample(brdfLutSampler, float2(NdotV, roughness)).rg;
     
     #define REFLECTANCE 0.04 // 0.16 * 0.5^2
     const float3 f0 = lerp(REFLECTANCE, baseColor, metalness);
-    float3 kS = F_SchlickRough(VdotH, f0, alpha);
+    float3 kS = F_SchlickRough(NdotV, f0, alpha);
     float3 kD = 1.0 - kS;
-    float3 irradiance = irradianceMap.Sample(irradianceMapSampler, normal).rgb;
+    
+    float specular = prefilteredColor * (kS * envBRDF.x + envBRDF.y);
     float3 diffuse = irradiance * baseColor.rgb;
-    float3 ambient = diffuse * kD;
+
+    float3 ambient = (diffuse * kD) + specular;
     
     return ambient;
 }
