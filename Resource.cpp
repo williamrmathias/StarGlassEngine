@@ -246,6 +246,37 @@ VkImageView createImageView(
     return imageView;
 }
 
+VkImageView createImageView(
+    Device* device, VkImage image, VkFormat format, VkImageAspectFlags aspect, uint32_t arrayLayer, uint32_t mipLevel
+)
+{
+    VkImageViewCreateInfo viewInfo{
+    .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+    .pNext = nullptr,
+    .flags = 0,
+    .image = image,
+    .viewType = VK_IMAGE_VIEW_TYPE_2D,
+    .format = format,
+    .components = VkComponentMapping{
+        .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+        .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+        .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+        .a = VK_COMPONENT_SWIZZLE_IDENTITY
+    },
+    .subresourceRange = VkImageSubresourceRange{
+        .aspectMask = aspect,
+        .baseMipLevel = mipLevel,
+        .levelCount = 1,
+        .baseArrayLayer = arrayLayer,
+        .layerCount = 1
+    },
+    };
+
+    VkImageView imageView;
+    VK_Check(vkCreateImageView(device->device, &viewInfo, nullptr, &imageView));
+    return imageView;
+}
+
 VkSampler createSampler(
     Device* device,
     SamplerDesc samplerDescription

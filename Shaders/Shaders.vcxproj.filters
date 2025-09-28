@@ -30,7 +30,7 @@
     <FxCompile Include="IrradianceConvolution.hlsl">
       <Filter>Source Files</Filter>
     </FxCompile>
-    <FxCompile Include="PrefilteredEnvMap.hlsl">
+    <FxCompile Include="PrefilteredEnvironment.hlsl">
       <Filter>Source Files</Filter>
     </FxCompile>
   </ItemGroup>

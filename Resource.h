@@ -64,6 +64,10 @@ VkImageView createImageView(
     Device* device, VkImage image, VkFormat format, VkImageAspectFlags aspect, uint32_t arrayLayer
 );
 
+VkImageView createImageView(
+    Device* device, VkImage image, VkFormat format, VkImageAspectFlags aspect, uint32_t arrayLayer, uint32_t mipLevel
+);
+
 /*
 * VkSampler
 */

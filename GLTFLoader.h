@@ -45,7 +45,11 @@ static const uint64_t defaultNormalMapHandle = 1;
 
 constexpr uint32_t kCubeMapDimension = 1024;
 constexpr uint32_t kIrradianceMapDimension = 64;
-constexpr uint32_t kPrefilteredEnvMapBaseDimension = 128;
+constexpr uint32_t kPrefilteredEnvMapBaseDimension = 256;
+
+constexpr VkFormat kSkyboxFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+constexpr VkFormat kIrradianceFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+constexpr VkFormat kPrefilteredEnvFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 
 struct Texture
 {

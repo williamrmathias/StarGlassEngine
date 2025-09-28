@@ -122,8 +122,7 @@ float3 ImportanceSampleGGX(float2 Xi, float3 normal, float roughness)
 {
     // input roughness param is a perceptual roughness
     // alpha is a more physically accurate value
-    // clamp to 0.045 to reduce specular aliasing
-    const float alpha = clamp(roughness * roughness, 0.045f, 1.f);
+    const float alpha = roughness * roughness;
     
     const float phi = 2.f * PI * Xi.x;
     const float cosTheta = sqrt((1.f - Xi.y) / (1.f + (alpha * alpha - 1.f) * Xi.y));

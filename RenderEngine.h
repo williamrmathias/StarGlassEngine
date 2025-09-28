@@ -78,11 +78,16 @@ struct ScreenSpacePushConstants
 };
 
 // must be 128 bytes
-struct SkyboxPushConstants
+struct CubeMapPushConstants
 {
     glm::mat4 viewproj;
-    float padding[16];
+    float roughness;
+    float padding[15];
 };
+
+static_assert(sizeof(PushConstants) <= 128);
+static_assert(sizeof(ScreenSpacePushConstants) <= 128);
+static_assert(sizeof(CubeMapPushConstants) <= 128);
 
 class RenderEngine
 {
@@ -162,6 +167,7 @@ public:
 
     Pipeline skyboxPipeline;
     Pipeline irradiancePipeline;
+    Pipeline prefilterEnvPipeline;
     Pipeline skyPipeline;
 
     void init(SDL_Window* window);
@@ -181,6 +187,7 @@ public:
 
     void renderSkyboxFace(VkCommandBuffer cmd, VkImageView colorAttachView, VkDescriptorSet hdrEquirecDescriptor, glm::mat4 viewproj, uint32_t renderExtent) const;
     void renderIrradianceMapFace(VkCommandBuffer cmd, VkImageView colorAttachView, VkDescriptorSet skyboxDescriptor, glm::mat4 viewproj, uint32_t renderExtent) const;
+    void renderPrefilterEnvMapFace(VkCommandBuffer cmd, VkImageView colorAttachView, VkDescriptorSet skyboxDescriptor, glm::mat4 viewproj, uint32_t renderExtent, float roughness) const;
 
 private:
     GlobalSceneData globalSceneData;
@@ -201,6 +208,7 @@ private:
     void initScreenSpacePipelines();
     void initSkyboxPipeline();
     void initIrradianceConvolutionPipeline();
+    void initPrefilteredEnvironmentPipeline();
     void initSkyPipeline();
     void initImGui(SDL_Window* window);
     void initScene();
