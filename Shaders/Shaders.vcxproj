@@ -129,6 +129,7 @@
     <PreBuildEvent />
   </ItemDefinitionGroup>
   <ItemGroup>
+    <FxCompile Include="IntegrateBRDF.hlsl" />
     <FxCompile Include="IrradianceConvolution.hlsl" />
     <FxCompile Include="PrefilteredEnvironment.hlsl" />
     <FxCompile Include="ScreenSpace.hlsl">

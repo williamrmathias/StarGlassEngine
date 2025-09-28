@@ -17,6 +17,9 @@ dxc.exe -T ps_6_0 -E irradiancePS -spirv -fspv-debug=vulkan-with-source -Fo Irra
 dxc.exe -T vs_6_0 -E prefilterVS -spirv -fspv-debug=vulkan-with-source -Fo PrefilteredEnvironment_prefilterVS.spirv PrefilteredEnvironment.hlsl > PrefilteredEnvironment_prefilterVS.log 2>&1
 dxc.exe -T ps_6_0 -E prefilterPS -spirv -fspv-debug=vulkan-with-source -Fo PrefilteredEnvironment_prefilterPS.spirv PrefilteredEnvironment.hlsl > PrefilteredEnvironment_prefilterPS.log 2>&1
 
+dxc.exe -T vs_6_0 -E integrateBRDF_VS -spirv -fspv-debug=vulkan-with-source -Fo IntegrateBRDF_integrateBRDF_VS.spirv IntegrateBRDF.hlsl > IntegrateBRDF_integrateBRDF_VS.log 2>&1
+dxc.exe -T ps_6_0 -E integrateBRDF_PS -spirv -fspv-debug=vulkan-with-source -Fo IntegrateBRDF_integrateBRDF_PS.spirv IntegrateBRDF.hlsl > IntegrateBRDF_integrateBRDF_PS.log 2>&1
+
 dxc.exe -T ps_6_0 -E baseColorDebugPS -fspv-debug=vulkan-with-source -spirv -Fo baseColorDebugPS.spirv SimpleShader.hlsl > baseColorDebugPS.log 2>&1
 dxc.exe -T ps_6_0 -E metalDebugPS -fspv-debug=vulkan-with-source -spirv -Fo metalDebugPS.spirv SimpleShader.hlsl > metalDebugPS.log 2>&1
 dxc.exe -T ps_6_0 -E roughDebugPS -fspv-debug=vulkan-with-source -spirv -Fo roughDebugPS.spirv SimpleShader.hlsl > roughDebugPS.log 2>&1
