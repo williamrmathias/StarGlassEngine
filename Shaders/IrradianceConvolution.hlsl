@@ -1,8 +1,8 @@
 [[vk::binding(0, 0)]]
-TextureCube environmentMap;
+TextureCube skybox;
 
 [[vk::binding(0, 0)]]
-SamplerState environmentMapSampler;
+SamplerState skyboxSampler;
 
 struct PushConstants
 {
@@ -133,7 +133,7 @@ PixelOutput irradiancePS(VertexOutput input)
             // tangent space -> world space
             float3 sampleVec = tangentSample.x * right + tangentSample.y * up + tangentSample.z * normal;
             
-            irradiance += environmentMap.Sample(environmentMapSampler, sampleVec).rgb * cosTheta * sinTheta;
+            irradiance += skybox.Sample(skyboxSampler, sampleVec).rgb * cosTheta * sinTheta;
         }
     }
     

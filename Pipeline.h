@@ -32,7 +32,7 @@ public:
     void clear();
 
     // rendering attachments
-    void setColorAttachmentFormats(std::span<VkFormat> colorFormats);
+    void setColorAttachmentFormats(std::span<const VkFormat> colorFormats);
     void setDepthAttachmentFormat(VkFormat depthFromat);
 
     // rasterization info

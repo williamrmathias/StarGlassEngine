@@ -86,7 +86,7 @@ void GraphicsPipelineBuilder::clear()
     init();
 }
 
-void GraphicsPipelineBuilder::setColorAttachmentFormats(std::span<VkFormat> colorFormats)
+void GraphicsPipelineBuilder::setColorAttachmentFormats(std::span<const VkFormat> colorFormats)
 {
     colorAttachmentFormats.assign(colorFormats.begin(), colorFormats.end());
 

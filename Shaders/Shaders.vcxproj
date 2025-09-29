@@ -129,7 +129,9 @@
     <PreBuildEvent />
   </ItemDefinitionGroup>
   <ItemGroup>
+    <FxCompile Include="IntegrateBRDF.hlsl" />
     <FxCompile Include="IrradianceConvolution.hlsl" />
+    <FxCompile Include="PrefilteredEnvironment.hlsl" />
     <FxCompile Include="ScreenSpace.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
