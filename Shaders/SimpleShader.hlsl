@@ -265,7 +265,7 @@ float3 brdf_IBL(
     float3 kS = F_SchlickRough(NdotV, f0, alpha);
     float3 kD = 1.0 - kS;
     
-    float specular = prefilteredColor * (kS * envBRDF.x + envBRDF.y);
+    float3 specular = prefilteredColor * (kS * envBRDF.x + envBRDF.y);
     float3 diffuse = irradiance * baseColor.rgb;
 
     float3 ambient = (diffuse * kD) + specular;
