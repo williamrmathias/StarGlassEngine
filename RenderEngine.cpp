@@ -834,8 +834,12 @@ void RenderEngine::initGraphicsPipelines()
         pipelineBuilder.setShaderStages(vertShader, "simpleVS", fragShader, "simplePS");
         pipelineBuilder.setPushConstantSize(static_cast<uint32_t>(sizeof(PushConstants)));
 
-        std::array<VkDescriptorSetLayout, 3> descriptorSetLayouts = {
-            globalSceneDataLayout, materialLayout, environmentLayout // irradiance map
+        std::array<VkDescriptorSetLayout, 5> descriptorSetLayouts = {
+            globalSceneDataLayout,
+            materialLayout, 
+            environmentLayout, // irradiance map
+            environmentLayout, // prefiltered env map
+            environmentLayout  // brdf lut
         };
         pipelineBuilder.setDescriptorSetLayouts(descriptorSetLayouts);
 
@@ -1260,8 +1264,14 @@ void RenderEngine::drawScene(VkCommandBuffer cmd)
 {
     Scene& scene = loadedGltf->scene;
 
+    VkDescriptorSet envDescriptors[3] = { 
+        scene.irradianceMap.descriptorSet,
+        scene.prefilteredEnvMap.descriptorSet,
+        scene.brdfLUT.descriptorSet 
+    };
+
     vkCmdBindDescriptorSets(
-        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline.layout, 2, 1, &scene.irradianceMap.descriptorSet,
+        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline.layout, 2, 3, envDescriptors,
         0, nullptr
     );
 
@@ -1318,7 +1328,7 @@ void RenderEngine::renderSky(VkCommandBuffer cmd, VkImageView colorAttachView, V
     //bind pipeline
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skyPipeline.pipeline);
 
-    CubeMap& skybox = loadedGltf->scene.prefilteredEnvMap;
+    CubeMap& skybox = loadedGltf->scene.skybox;
 
     // bind skybox
     vkCmdBindDescriptorSets(

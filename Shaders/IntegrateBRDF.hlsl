@@ -88,6 +88,16 @@ float G_SmithGGXCorrelated(float NdotV, float NdotL, float alpha)
     return GGXV * GGXL;
 }
 
+float G_Smith(float NdotV, float NdotL, float roughness)
+{
+    float k = (roughness * roughness) / 2.f;
+    
+    float ggxL = NdotL / (NdotL * (1.f - k) + k);
+    float ggxV = NdotV / (NdotV * (1.f - k) + k);
+    
+    return ggxL * ggxV;
+}
+
 #define NUM_SAMPLES 1024
 
 // this function generate a LUT mapping (NdotV, roughness) -> specular BRDF
@@ -103,7 +113,7 @@ PixelOutput integrateBRDF_PS(VertexOutput input)
     float A = 0.f;
     float B = 0.f;
     
-    float N = float3(0.f, 0.f, 1.f);
+    float3 N = float3(0.f, 0.f, 1.f);
     
     for (uint i = 0; i < NUM_SAMPLES; ++i)
     {
@@ -119,7 +129,7 @@ PixelOutput integrateBRDF_PS(VertexOutput input)
         
         if (NdotL > 0.f)
         {
-            float G = G_SmithGGXCorrelated(NdotV, NdotL, roughness * roughness);
+            float G = G_Smith(NdotV, NdotL, roughness);
             float G_Vis = (G * VdotH) / (NdotH * NdotV);
             float Fc = pow(1.f - VdotH, 5.f);
             
