@@ -30,7 +30,8 @@ struct PixelOutput
 
 VertexOutput screenSpaceVS(VertexInput input)
 {
-    const float2 fullScreenTriangle[3] = {
+    const float2 fullScreenTriangle[3] = 
+    {
         float2(-1.f, -1.f),
         float2(-1.f, 3.f),
         float2(3.f, -1.f)

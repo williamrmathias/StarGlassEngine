@@ -85,6 +85,12 @@ struct CubeMapPushConstants
     float padding[15];
 };
 
+struct IBLPushConstants
+{
+    uint32_t faceIdx;
+    float roughness;
+};
+
 static_assert(sizeof(PushConstants) <= 128);
 static_assert(sizeof(ScreenSpacePushConstants) <= 128);
 static_assert(sizeof(CubeMapPushConstants) <= 128);
@@ -187,8 +193,8 @@ public:
     void endAndSubmitImmediateCommands();
 
     void renderSkyboxFace(VkCommandBuffer cmd, VkImageView colorAttachView, VkDescriptorSet hdrEquirecDescriptor, glm::mat4 viewproj, uint32_t renderExtent) const;
-    void renderIrradianceMapFace(VkCommandBuffer cmd, VkImageView colorAttachView, VkDescriptorSet skyboxDescriptor, glm::mat4 viewproj, uint32_t renderExtent) const;
-    void renderPrefilterEnvMapFace(VkCommandBuffer cmd, VkImageView colorAttachView, VkDescriptorSet skyboxDescriptor, glm::mat4 viewproj, uint32_t renderExtent, float roughness) const;
+    void renderIrradianceMapFace(VkCommandBuffer cmd, VkImageView colorAttachView, VkDescriptorSet skyboxDescriptor, uint8_t faceIdx, uint32_t renderExtent) const;
+    void renderPrefilterEnvMapFace(VkCommandBuffer cmd, VkImageView colorAttachView, VkDescriptorSet skyboxDescriptor, uint8_t faceIdx, uint32_t renderExtent, float roughness) const;
     void renderBrdfLUT(VkCommandBuffer cmd, VkImageView colorAttachView, uint32_t renderExtent) const;
 
 private:

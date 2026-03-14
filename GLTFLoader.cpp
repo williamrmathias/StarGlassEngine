@@ -1285,8 +1285,7 @@ static void generateSkybox(
 static void generateIrradianceMap(
     gfx::RenderEngine* engine,
     const CubeMap& skybox,
-    const CubeMap& irradianceMap,
-    glm::mat4 faceProj, glm::mat4 faceViews[6]
+    const CubeMap& irradianceMap
 )
 {
     gfx::Device* device = engine->device.get();
@@ -1300,12 +1299,12 @@ static void generateIrradianceMap(
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_IMAGE_ASPECT_COLOR_BIT);
 
-    for (uint32_t i = 0; i < 6; i++)
+    for (uint32_t faceIdx = 0; faceIdx < 6; faceIdx++)
     {
         VkImageView faceView = gfx::createImageView(
-            device, irradianceMap.image.image, irradianceMap.image.format, VK_IMAGE_ASPECT_COLOR_BIT, i);
+            device, irradianceMap.image.image, irradianceMap.image.format, VK_IMAGE_ASPECT_COLOR_BIT, faceIdx);
 
-        engine->renderIrradianceMapFace(cmd, faceView, skybox.descriptorSet, faceProj * faceViews[i], kIrradianceMapDimension);
+        engine->renderIrradianceMapFace(cmd, faceView, skybox.descriptorSet, faceIdx, kIrradianceMapDimension);
 
         vkDestroyImageView(device->device, faceView, nullptr);
     }
@@ -1321,8 +1320,7 @@ static void generateIrradianceMap(
 static void generatePrefilteredEnvMap(
     gfx::RenderEngine* engine,
     const CubeMap& skybox,
-    const CubeMap& prefilteredEnvMap,
-    glm::mat4 faceProj, glm::mat4 faceViews[6]
+    const CubeMap& prefilteredEnvMap
 )
 {
     gfx::Device* device = engine->device.get();
@@ -1344,12 +1342,12 @@ static void generatePrefilteredEnvMap(
         const uint32_t mipDimension = kPrefilteredEnvMapBaseDimension >> mip;
         const float roughness = (float)mip / (float)(mipLevels - 1);
 
-        for (uint32_t face = 0; face < 6; ++face)
+        for (uint32_t faceIdx = 0; faceIdx < 6; ++faceIdx)
         {
             VkImageView faceView = gfx::createImageView(
-                device, prefilteredEnvMap.image.image, prefilteredEnvMap.image.format, VK_IMAGE_ASPECT_COLOR_BIT, face, mip);
+                device, prefilteredEnvMap.image.image, prefilteredEnvMap.image.format, VK_IMAGE_ASPECT_COLOR_BIT, faceIdx, mip);
 
-            engine->renderPrefilterEnvMapFace(cmd, faceView, skybox.descriptorSet, faceProj * faceViews[face], mipDimension, roughness);
+            engine->renderPrefilterEnvMapFace(cmd, faceView, skybox.descriptorSet, faceIdx, mipDimension, roughness);
 
             vkDestroyImageView(device->device, faceView, nullptr);
         }
@@ -1527,7 +1525,7 @@ void LoadedGltf::loadHDRSkybox(std::string_view hdriPath)
         0, nullptr
     );
 
-    generateIrradianceMap(engine, skybox, irradianceMap, faceProjection, faceViews);
+    generateIrradianceMap(engine, skybox, irradianceMap);
 
     irradianceMap.view = gfx::createCubemapView(device, irradianceMap.image.image, irradianceMap.image.format, VK_IMAGE_ASPECT_COLOR_BIT);
 
@@ -1557,7 +1555,7 @@ void LoadedGltf::loadHDRSkybox(std::string_view hdriPath)
         0, nullptr
     );
 
-    generatePrefilteredEnvMap(engine, skybox, prefilteredEnvMap, faceProjection, faceViews);
+    generatePrefilteredEnvMap(engine, skybox, prefilteredEnvMap);
 
     prefilteredEnvMap.view = gfx::createCubemapView(device, prefilteredEnvMap.image.image, prefilteredEnvMap.image.format, VK_IMAGE_ASPECT_COLOR_BIT);
 

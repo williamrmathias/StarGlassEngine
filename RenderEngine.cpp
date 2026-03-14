@@ -1476,7 +1476,7 @@ void RenderEngine::renderSkyboxFace(
 }
 
 void RenderEngine::renderIrradianceMapFace(
-    VkCommandBuffer cmd, VkImageView colorAttachView, VkDescriptorSet skyboxDescriptor, glm::mat4 viewproj, uint32_t renderExtent) const
+    VkCommandBuffer cmd, VkImageView colorAttachView, VkDescriptorSet skyboxDescriptor, uint8_t faceIdx, uint32_t renderExtent) const
 {
     //bind pipeline
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, irradiancePipeline.pipeline);
@@ -1505,8 +1505,9 @@ void RenderEngine::renderIrradianceMapFace(
     );
 
     // bind push constants
-    CubeMapPushConstants pushConstants{
-        .viewproj = viewproj
+    IBLPushConstants pushConstants{
+        .faceIdx = faceIdx,
+        .roughness = 0 // doesn't matter
     };
 
     vkCmdPushConstants(
@@ -1544,14 +1545,14 @@ void RenderEngine::renderIrradianceMapFace(
 
     vkCmdBeginRendering(cmd, &renderInfo);
 
-    vkCmdDraw(cmd, 36, 1, 0, 0);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
 
     // end rendering
     vkCmdEndRendering(cmd);
 }
 
 void RenderEngine::renderPrefilterEnvMapFace(
-    VkCommandBuffer cmd, VkImageView colorAttachView, VkDescriptorSet skyboxDescriptor, glm::mat4 viewproj, uint32_t renderExtent, float roughness) const
+    VkCommandBuffer cmd, VkImageView colorAttachView, VkDescriptorSet skyboxDescriptor, uint8_t faceIdx, uint32_t renderExtent, float roughness) const
 {
     //bind pipeline
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, prefilterEnvPipeline.pipeline);
@@ -1580,8 +1581,8 @@ void RenderEngine::renderPrefilterEnvMapFace(
     );
 
     // bind push constants
-    CubeMapPushConstants pushConstants{
-        .viewproj = viewproj,
+    IBLPushConstants pushConstants{
+        .faceIdx = faceIdx,
         .roughness = roughness
     };
 
@@ -1620,7 +1621,7 @@ void RenderEngine::renderPrefilterEnvMapFace(
 
     vkCmdBeginRendering(cmd, &renderInfo);
 
-    vkCmdDraw(cmd, 36, 1, 0, 0);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
 
     // end rendering
     vkCmdEndRendering(cmd);

@@ -6,7 +6,7 @@ SamplerState skyboxSampler;
 
 struct PushConstants
 {
-    float4x4 viewproj;
+    uint faceIndex;
     float roughness;
 };
 
@@ -21,7 +21,7 @@ struct VertexInput
 struct VertexOutput
 {
     float4 position : SV_Position;
-    float3 positionLocal : TEXCOORD0;
+    float2 uv : TEXCOORD0;
 };
 
 struct PixelOutput
@@ -31,69 +31,18 @@ struct PixelOutput
 
 VertexOutput prefilterVS(VertexInput input)
 {
-    static const float3 unitCube[36] =
+    const float2 fullScreenTriangle[3] =
     {
-        // -Z face
-        float3(-0.5f, -0.5f, -0.5f),
-        float3(0.5f, -0.5f, -0.5f),
-        float3(0.5f, 0.5f, -0.5f),
-
-        float3(0.5f, 0.5f, -0.5f),
-        float3(-0.5f, 0.5f, -0.5f),
-        float3(-0.5f, -0.5f, -0.5f),
-
-        // +Z face
-        float3(-0.5f, -0.5f, 0.5f),
-        float3(0.5f, -0.5f, 0.5f),
-        float3(0.5f, 0.5f, 0.5f),
-
-        float3(0.5f, 0.5f, 0.5f),
-        float3(-0.5f, 0.5f, 0.5f),
-        float3(-0.5f, -0.5f, 0.5f),
-
-        // -X face
-        float3(-0.5f, -0.5f, -0.5f),
-        float3(-0.5f, -0.5f, 0.5f),
-        float3(-0.5f, 0.5f, 0.5f),
-
-        float3(-0.5f, 0.5f, 0.5f),
-        float3(-0.5f, 0.5f, -0.5f),
-        float3(-0.5f, -0.5f, -0.5f),
-
-        // +X face
-        float3(0.5f, -0.5f, -0.5f),
-        float3(0.5f, -0.5f, 0.5f),
-        float3(0.5f, 0.5f, 0.5f),
-
-        float3(0.5f, 0.5f, 0.5f),
-        float3(0.5f, 0.5f, -0.5f),
-        float3(0.5f, -0.5f, -0.5f),
-
-        // -Y face
-        float3(-0.5f, -0.5f, -0.5f),
-        float3(0.5f, -0.5f, -0.5f),
-        float3(0.5f, -0.5f, 0.5f),
-
-        float3(0.5f, -0.5f, 0.5f),
-        float3(-0.5f, -0.5f, 0.5f),
-        float3(-0.5f, -0.5f, -0.5f),
-
-        // +Y face
-        float3(-0.5f, 0.5f, -0.5f),
-        float3(0.5f, 0.5f, -0.5f),
-        float3(0.5f, 0.5f, 0.5f),
-
-        float3(0.5f, 0.5f, 0.5f),
-        float3(-0.5f, 0.5f, 0.5f),
-        float3(-0.5f, 0.5f, -0.5f)
+        float2(-1.f, -1.f),
+        float2(-1.f, 3.f),
+        float2(3.f, -1.f)
     };
 
-    float3 vertex = unitCube[input.vertexID];
-    
     VertexOutput output;
-    float4 clip = mul(pushConstants.viewproj, float4(vertex, 1.f));
-    output.position = clip.xyzz; // infinite depth
-    output.positionLocal = vertex;
+    output.position = float4(fullScreenTriangle[input.vertexID], 0.f, 1.f);
+    
+    // Map NDC [-1, 1] to UV space [0, 1]
+    output.uv = output.position.xy * 0.5f + 0.5f;
     
 	return output;
 }
@@ -143,12 +92,43 @@ float3 ImportanceSampleGGX(float2 Xi, float3 normal, float roughness)
     return normalize(sampleVec);
 }
 
+float3 GetRayDirection(float2 uv, uint faceIdx)
+{
+    // Convert UV [0,1] to range [-1, 1]
+    float2 p = uv * 2.0f - 1.0f;
+    
+    float3 dir;
+    switch (faceIdx)
+    {
+        case 0:
+            dir = float3(1.0, -p.y, -p.x);
+            break; // +X
+        case 1:
+            dir = float3(-1.0, -p.y, p.x);
+            break; // -X
+        case 2:
+            dir = float3(p.x, 1.0, p.y);
+            break; // +Y
+        case 3:
+            dir = float3(p.x, -1.0, -p.y);
+            break; // -Y
+        case 4:
+            dir = float3(p.x, -p.y, 1.0);
+            break; // +Z
+        case 5:
+            dir = float3(-p.x, -p.y, -1.0);
+            break; // -Z
+    }
+    
+    return normalize(dir);
+}
+
 #define NUM_SAMPLES 4096
 PixelOutput prefilterPS(VertexOutput input)
 {
     PixelOutput result;
     
-    float3 normal = normalize(input.positionLocal);
+    float3 normal = GetRayDirection(input.uv, pushConstants.faceIndex);
     float3 V = normal;
     
     float totalWeight = 0.f;
