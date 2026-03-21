@@ -322,6 +322,7 @@ void RenderEngine::cleanup()
         skyboxPipeline.cleanup(device.get());
         irradiancePipeline.cleanup(device.get());
         prefilterEnvPipeline.cleanup(device.get());
+        brdfLutPipeline.cleanup(device.get());
         skyPipeline.cleanup(device.get());
     }
 
