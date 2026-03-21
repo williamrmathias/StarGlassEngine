@@ -67,7 +67,7 @@ struct PushConstants
     glm::mat4 model;
     MaterialConstants material;
 
-    float padding[10];
+    float padding[9];
 };
 
 // must be 128 bytes
@@ -94,6 +94,21 @@ struct IBLPushConstants
 static_assert(sizeof(PushConstants) <= 128);
 static_assert(sizeof(ScreenSpacePushConstants) <= 128);
 static_assert(sizeof(CubeMapPushConstants) <= 128);
+static_assert(sizeof(IBLPushConstants) <= 128);
+
+struct DrawCommand
+{
+    BufferHandle vertexBuffer;
+    BufferHandle indexBuffer;
+
+    uint32_t indexCount;
+    VkIndexType indexType;
+
+    MaterialHandle material;
+
+    glm::mat4 transform;
+    Extent worldBoundingBox;
+};
 
 class RenderEngine
 {
@@ -101,6 +116,9 @@ public:
 
     std::unique_ptr<Device> device;
     std::unique_ptr<LoadedGltf> loadedGltf;
+
+    std::vector<DrawCommand> renderQueueOpaque;
+    std::vector<DrawCommand> renderQueueAlphaBlend;
 
     VkCommandPool immediateCommandPool;
     VkCommandBuffer immediateCommandBuffer;
@@ -156,8 +174,9 @@ public:
         PassThrough
     };
 
-    Pipeline activePipeline;
-    Pipeline graphicsPipeline;
+    Pipeline activeOpaquePipeline;
+    Pipeline opaquePipeline;
+    Pipeline transparentPipeline;
 
     // debug material pipelines
     Pipeline baseColorPipeline;
@@ -185,7 +204,7 @@ public:
     void setSunLuminance(float luminance);
     void setViewMatrix(const glm::mat4 view);
     void setViewPosition(const glm::vec3 viewPosition);
-    void setActiveMainPassPipeline(PipelineType pipeline);
+    void setActiveOpaquePassPipeline(PipelineType pipeline);
     void setActiveScreenSpacePipeline(PipelineType pipeline);
     void setExposure(float exposureIn) { exposure = exposureIn; }
 

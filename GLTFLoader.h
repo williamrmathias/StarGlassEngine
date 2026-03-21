@@ -39,9 +39,10 @@ using TextureHandle = uint64_t;
 using MaterialHandle = uint64_t;
 using MeshHandle = uint64_t;
 
-static const uint64_t defaultHandle = 0;
-static const uint64_t errorHandle = 1;
-static const uint64_t defaultNormalMapHandle = 1;
+constexpr uint64_t kDefaultHandle = 0;
+constexpr uint64_t kErrorHandle = 1;
+constexpr uint64_t kDefaultNormalMapHandle = 1;
+constexpr uint64_t kInvalidHandle = UINT64_MAX; // do not assign a material to this value
 
 constexpr uint32_t kCubeMapDimension = 1024;
 constexpr uint32_t kIrradianceMapDimension = 64;
@@ -67,11 +68,21 @@ struct MaterialConstants
     glm::vec4 baseColorFactor;
     float metalnessFactor;
     float roughnessFactor;
+    float alphaCutoff;
+};
+
+// indicates what draw pipeline to use
+enum MaterialFlags
+{
+    MaterialFlag_Opaque,
+    MaterialFlag_AlphaMask,
+    MaterialFlag_AlphaBlend
 };
 
 struct Material
 {
     MaterialConstants constants;
+    MaterialFlags flags;
 
     TextureHandle baseColorTex;
     TextureHandle metalRoughTex;
@@ -114,6 +125,7 @@ struct Extent
     glm::vec3 min = Vec3::infinity;
 
     std::array<glm::vec3, 8> getCorners() const;
+    glm::vec3 getCenter() const;
 };
 
 struct MeshPrimitive
@@ -128,6 +140,7 @@ struct MeshPrimitive
     VkIndexType indexType;
 
     MaterialHandle material;
+    MaterialFlags flags;
 
     Extent boundingBox;
 

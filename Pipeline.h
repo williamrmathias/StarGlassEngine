@@ -22,6 +22,12 @@ struct Pipeline
     void cleanup(Device* device);
 };
 
+enum class BlendState : uint8_t
+{
+    Disabled,
+    Over // out.rgb = (src.rgb * src.a) + (dst.rgb * (1-src.a)); out.a = src.a + dst.a * (1-src.a)
+};
+
 class GraphicsPipelineBuilder
 {
 public:
@@ -57,8 +63,7 @@ public:
 
     void setCullMode(VkCullModeFlags cullMode) { rasterInfo.cullMode = cullMode; }
 
-    void disableBlendMode();
-    void setBlendMode(std::span<VkBool32> blendEnable);
+    void setBlendMode(std::span<BlendState> blendState);
 
     // Shader input data layouts
     void setPushConstantSize(uint32_t size);

@@ -24,7 +24,7 @@ int main()
         return 1;
     }
     SDL_Window* window = SDL_CreateWindow("Vulkan Window", SDL_WINDOWPOS_CENTERED,
-                                          SDL_WINDOWPOS_CENTERED, 1280, 720, SDL_WINDOW_VULKAN);
+                                          SDL_WINDOWPOS_CENTERED, 2560 / 1.5, 1440 / 1.5, SDL_WINDOW_VULKAN);
     if (window == nullptr)
     {
         SDL_LogError(0, "Detected SDL Error: Could not create SDL window\n");
@@ -122,7 +122,7 @@ int main()
                 if (ImGui::Selectable("UvDebug", pipeline == PipelineType::UvDebug))
                     pipeline = PipelineType::UvDebug;
 
-                renderEngine.setActiveMainPassPipeline(pipeline);
+                renderEngine.setActiveOpaquePassPipeline(pipeline);
             }
 
             if (ImGui::CollapsingHeader("Camera Settings"))
