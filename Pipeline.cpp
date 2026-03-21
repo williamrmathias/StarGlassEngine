@@ -178,7 +178,7 @@ void GraphicsPipelineBuilder::setSampleCount(VkSampleCountFlagBits sampleCount)
 {
     // todo: Multisampling
     if (sampleCount != VK_SAMPLE_COUNT_1_BIT)
-        assert("GraphicsPipelineBuilderError: Multisampled Pipelines Not Supported!");
+        assert(!"GraphicsPipelineBuilderError: Multisampled Pipelines Not Supported!");
 
     multisampleInfo.rasterizationSamples = sampleCount;
 }
@@ -188,7 +188,7 @@ void GraphicsPipelineBuilder::setDepthMode(VkBool32 depthTestEnable, VkBool32 de
     if (renderInfo.depthAttachmentFormat == VK_FORMAT_UNDEFINED &&
         (depthTestEnable == VK_TRUE || depthWriteEnable == VK_TRUE))
     {
-        assert("GraphicsPipelineBuilderError: Depth Test / Write enabled, but there's no depth attachment");
+        assert(!"GraphicsPipelineBuilderError: Depth Test / Write enabled, but there's no depth attachment");
     }
 
     depthStencilInfo.depthTestEnable = depthTestEnable;
@@ -200,35 +200,49 @@ void GraphicsPipelineBuilder::setDepthFunc(VkCompareOp func)
     depthStencilInfo.depthCompareOp = func;
 }
 
-void GraphicsPipelineBuilder::disableBlendMode()
-{
-    std::vector<VkBool32> blendModes(renderInfo.colorAttachmentCount, VK_FALSE);
-    setBlendMode(blendModes);
-}
-
-void GraphicsPipelineBuilder::setBlendMode(std::span<VkBool32> blendEnable)
+void GraphicsPipelineBuilder::setBlendMode(std::span<BlendState> blendEnable)
 {
     if (blendEnable.size() != renderInfo.colorAttachmentCount)
-        assert("GraphicsPipelineBuilderError: Not every color attachment has a blend state specified");
+        assert(!"GraphicsPipelineBuilderError: Not every color attachment has a blend state specified");
 
-    VkPipelineColorBlendAttachmentState blendState{
-        .blendEnable = VK_FALSE,
-        .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
-        .dstColorBlendFactor = VK_BLEND_FACTOR_ZERO,
-        .colorBlendOp = VK_BLEND_OP_ADD,
-        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
-        .alphaBlendOp = VK_BLEND_OP_ADD,
-        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT
-            | VK_COLOR_COMPONENT_G_BIT
-            | VK_COLOR_COMPONENT_B_BIT
-            | VK_COLOR_COMPONENT_A_BIT
-    };
-
+    blendAttachmentStates.clear();
     blendAttachmentStates.reserve(renderInfo.colorAttachmentCount);
-    for (auto blendMode : blendEnable)
+
+    for (size_t colorIdx = 0; colorIdx < renderInfo.colorAttachmentCount; ++colorIdx)
     {
-        blendState.blendEnable = blendMode;
+        VkPipelineColorBlendAttachmentState blendState;
+        switch (blendEnable[colorIdx])
+        {
+        case BlendState::Over:
+        {
+            blendState = VkPipelineColorBlendAttachmentState{
+                .blendEnable = VK_TRUE,
+                .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+                .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                .colorBlendOp = VK_BLEND_OP_ADD,
+                .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+                .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                .alphaBlendOp = VK_BLEND_OP_ADD,
+                .colorWriteMask = VK_COLOR_COMPONENT_R_BIT
+                    | VK_COLOR_COMPONENT_G_BIT
+                    | VK_COLOR_COMPONENT_B_BIT
+                    | VK_COLOR_COMPONENT_A_BIT
+            };
+            break;
+        }
+        case BlendState::Disabled:
+        default:
+        {
+            blendState = VkPipelineColorBlendAttachmentState{
+                .blendEnable = VK_FALSE,
+                .colorWriteMask = VK_COLOR_COMPONENT_R_BIT
+                    | VK_COLOR_COMPONENT_G_BIT
+                    | VK_COLOR_COMPONENT_B_BIT
+                    | VK_COLOR_COMPONENT_A_BIT
+            };
+            break;
+        }
+        }
         blendAttachmentStates.emplace_back(blendState);
     }
 

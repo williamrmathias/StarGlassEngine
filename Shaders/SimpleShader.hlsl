@@ -60,6 +60,7 @@ struct MaterialConstants
     float4 baseColorFactor;
     float metalnessFactor;
     float roughnessFactor;
+    float alphaCutoff;
 };
 
 struct PushConstants
@@ -263,7 +264,7 @@ float3 brdf_IBL(
     #define REFLECTANCE 0.04 // 0.16 * 0.5^2
     const float3 f0 = lerp(REFLECTANCE, baseColor, metalness);
     float3 kS = F_SchlickRough(NdotV, f0, alpha);
-    float3 kD = 1.0 - kS;
+    float3 kD = (1.f - kS) * (1.f - metalness);
     
     float3 specular = prefilteredColor * (kS * envBRDF.x + envBRDF.y);
     float3 diffuse = irradiance * baseColor.rgb;
@@ -278,6 +279,11 @@ PixelOutput simplePS(VertexOutput input)
     PixelOutput result;
     
     float4 baseColorSample = baseColorTex.Sample(baseColorSampler, input.uv);
+    
+    // evaluate if alpha cutout should be split into a different pipeline
+    // (due to disabling early-Z test)
+    clip(baseColorSample.a - pushConstants.material.alphaCutoff);
+    
     float4 metalRoughSample = metalRoughTex.Sample(metalRoughSampler, input.uv);
     
     float4 baseColor = baseColorSample * pushConstants.material.baseColorFactor * input.color;
@@ -294,7 +300,7 @@ PixelOutput simplePS(VertexOutput input)
     
     float3 ambient = brdf_IBL(baseColor.rgb, roughness, metalness, viewDirection, lightDirection, normal);
     
-    result.color = float4(radiance + ambient, 1.f);
+    result.color = float4(radiance + ambient, baseColorSample.a);
     return result;
 }
 

@@ -99,7 +99,7 @@ void RenderEngine::render()
     );
 
     vkCmdBindDescriptorSets(
-        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline.layout, 0, 1, &frame.globalDescriptorSet, 
+        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activeOpaquePipeline.layout, 0, 1, &frame.globalDescriptorSet, 
         0, nullptr
     );
 
@@ -161,9 +161,6 @@ void RenderEngine::render()
         .extent = device->swapchain.swapchainExtent
     };
     vkCmdSetScissor(cmd, 0, 1, &scissor);
-
-    // bind pipeline
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline.pipeline);
 
     drawScene(cmd);
 
@@ -309,7 +306,8 @@ void RenderEngine::cleanup()
 
     {
         // pipelines
-        graphicsPipeline.cleanup(device.get());
+        opaquePipeline.cleanup(device.get());
+        transparentPipeline.cleanup(device.get());
 
         baseColorPipeline.cleanup(device.get());
         metalPipeline.cleanup(device.get());
@@ -324,6 +322,7 @@ void RenderEngine::cleanup()
         skyboxPipeline.cleanup(device.get());
         irradiancePipeline.cleanup(device.get());
         prefilterEnvPipeline.cleanup(device.get());
+        brdfLutPipeline.cleanup(device.get());
         skyPipeline.cleanup(device.get());
     }
 
@@ -418,30 +417,30 @@ void RenderEngine::setViewPosition(const glm::vec3 viewPosition)
     globalSceneData.viewPosition = viewPosition;
 }
 
-void RenderEngine::setActiveMainPassPipeline(PipelineType pipeline)
+void RenderEngine::setActiveOpaquePassPipeline(PipelineType pipeline)
 {
     switch (pipeline)
     {
     case gfx::RenderEngine::PipelineType::MainGraphics:
-        activePipeline = graphicsPipeline;
+        activeOpaquePipeline = opaquePipeline;
         break;
     case gfx::RenderEngine::PipelineType::BaseColorDebug:
-        activePipeline = baseColorPipeline;
+        activeOpaquePipeline = baseColorPipeline;
         break;
     case gfx::RenderEngine::PipelineType::MetalDebug:
-        activePipeline = metalPipeline;
+        activeOpaquePipeline = metalPipeline;
         break;
     case gfx::RenderEngine::PipelineType::RoughDebug:
-        activePipeline = roughPipeline;
+        activeOpaquePipeline = roughPipeline;
         break;
     case gfx::RenderEngine::PipelineType::NormalDebug:
-        activePipeline = normalPipeline;
+        activeOpaquePipeline = normalPipeline;
         break;
     case gfx::RenderEngine::PipelineType::VertexNormalDebug:
-        activePipeline = vertNormalPipeline;
+        activeOpaquePipeline = vertNormalPipeline;
         break;
     case gfx::RenderEngine::PipelineType::UvDebug:
-        activePipeline = uvPipeline;
+        activeOpaquePipeline = uvPipeline;
         break;
     default:
         break;
@@ -820,12 +819,11 @@ void RenderEngine::initGraphicsPipelines()
 
     std::filesystem::path vertexShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/SimpleShader_simpleVS.spirv");
     VkShaderModule vertShader = loadShaderModule(vertexShaderPath.string().c_str());
+    std::filesystem::path fragmentShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/SimpleShader_simplePS.spirv");
+    VkShaderModule fragShader = loadShaderModule(fragmentShaderPath.string().c_str());
 
     {
-        // graphics pipeline
-        std::filesystem::path fragmentShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/SimpleShader_simplePS.spirv");
-        VkShaderModule fragShader = loadShaderModule(fragmentShaderPath.string().c_str());
-
+        // opaque pass pipeline
         // render attachments
         pipelineBuilder.setColorAttachmentFormats(std::span{ &frames[0].hdrColorImage.format, 1});
         pipelineBuilder.setDepthAttachmentFormat(depthImage.format);
@@ -853,13 +851,24 @@ void RenderEngine::initGraphicsPipelines()
         pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
         pipelineBuilder.setSampleCount(VK_SAMPLE_COUNT_1_BIT);
         pipelineBuilder.setDepthMode(VK_TRUE, VK_TRUE);
-        pipelineBuilder.disableBlendMode();
+
+        BlendState blendState = BlendState::Disabled;
+        pipelineBuilder.setBlendMode(std::span{&blendState, 1});
 
         // build pipeline
-        graphicsPipeline = pipelineBuilder.build(device.get());
+        opaquePipeline = pipelineBuilder.build(device.get());
+    }
 
-        // Shader modules can be destroyed after the pipeline is created
-        vkDestroyShaderModule(device->device, fragShader, nullptr);
+    {
+        // transparent pipeline
+        BlendState blendState = BlendState::Over;
+        pipelineBuilder.setBlendMode(std::span{ &blendState, 1 });
+
+        transparentPipeline = pipelineBuilder.build(device.get());
+
+        // now reset blending
+        blendState = BlendState::Disabled;
+        pipelineBuilder.setBlendMode(std::span{ &blendState, 1 });
     }
 
     {
@@ -909,8 +918,9 @@ void RenderEngine::initGraphicsPipelines()
         vkDestroyShaderModule(device->device, uvFragShader, nullptr);
     }
 
-    activePipeline = graphicsPipeline;
+    activeOpaquePipeline = opaquePipeline;
     vkDestroyShaderModule(device->device, vertShader, nullptr);
+    vkDestroyShaderModule(device->device, fragShader, nullptr);
 }
 
 void RenderEngine::initScreenSpacePipelines()
@@ -941,7 +951,8 @@ void RenderEngine::initScreenSpacePipelines()
         pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
         pipelineBuilder.setSampleCount(VK_SAMPLE_COUNT_1_BIT);
         pipelineBuilder.setDepthMode(VK_FALSE, VK_FALSE);
-        pipelineBuilder.disableBlendMode();
+        BlendState blendState = BlendState::Disabled;
+        pipelineBuilder.setBlendMode(std::span{ &blendState, 1 });
 
         // build pipeline
         toneMapPipeline = pipelineBuilder.build(device.get());
@@ -990,7 +1001,8 @@ void RenderEngine::initSkyboxPipeline()
     pipelineBuilder.setSampleCount(VK_SAMPLE_COUNT_1_BIT);
     pipelineBuilder.setDepthMode(VK_FALSE, VK_FALSE);
     pipelineBuilder.setCullMode(0);
-    pipelineBuilder.disableBlendMode();
+    BlendState blendState = BlendState::Disabled;
+    pipelineBuilder.setBlendMode(std::span{ &blendState, 1 });
 
     // build pipeline
     skyboxPipeline = pipelineBuilder.build(device.get());
@@ -1026,7 +1038,8 @@ void RenderEngine::initIrradianceConvolutionPipeline()
     pipelineBuilder.setSampleCount(VK_SAMPLE_COUNT_1_BIT);
     pipelineBuilder.setDepthMode(VK_FALSE, VK_FALSE);
     pipelineBuilder.setCullMode(0);
-    pipelineBuilder.disableBlendMode();
+    BlendState blendState = BlendState::Disabled;
+    pipelineBuilder.setBlendMode(std::span{ &blendState, 1 });
 
     // build pipeline
     irradiancePipeline = pipelineBuilder.build(device.get());
@@ -1062,7 +1075,8 @@ void RenderEngine::initPrefilteredEnvironmentPipeline()
     pipelineBuilder.setSampleCount(VK_SAMPLE_COUNT_1_BIT);
     pipelineBuilder.setDepthMode(VK_FALSE, VK_FALSE);
     pipelineBuilder.setCullMode(0);
-    pipelineBuilder.disableBlendMode();
+    BlendState blendState = BlendState::Disabled;
+    pipelineBuilder.setBlendMode(std::span{ &blendState, 1 });
 
     // build pipeline
     prefilterEnvPipeline = pipelineBuilder.build(device.get());
@@ -1096,7 +1110,8 @@ void RenderEngine::initBrdfLutPipeline()
     pipelineBuilder.setSampleCount(VK_SAMPLE_COUNT_1_BIT);
     pipelineBuilder.setDepthMode(VK_FALSE, VK_FALSE);
     pipelineBuilder.setCullMode(0);
-    pipelineBuilder.disableBlendMode();
+    BlendState blendState = BlendState::Disabled;
+    pipelineBuilder.setBlendMode(std::span{ &blendState, 1 });
 
     // build pipeline
     brdfLutPipeline = pipelineBuilder.build(device.get());
@@ -1135,7 +1150,8 @@ void RenderEngine::initSkyPipeline()
     pipelineBuilder.setDepthMode(VK_TRUE, VK_TRUE);
     pipelineBuilder.setDepthFunc(VK_COMPARE_OP_LESS_OR_EQUAL);
     pipelineBuilder.setCullMode(0);
-    pipelineBuilder.disableBlendMode();
+    BlendState blendState = BlendState::Disabled;
+    pipelineBuilder.setBlendMode(std::span{ &blendState, 1 });
 
     // build pipeline
     skyPipeline = pipelineBuilder.build(device.get());
@@ -1174,6 +1190,22 @@ void RenderEngine::initImGui(SDL_Window* window)
     ImGui_ImplVulkan_CreateFontsTexture();
 }
 
+static inline DrawCommand getDrawFromPrimitive(const MeshPrimitive& primitive, const glm::mat4& nodeTransform)
+{
+    return DrawCommand{
+        .vertexBuffer = primitive.vertexBuffer,
+        .indexBuffer = primitive.indexBuffer,
+        .indexCount = primitive.indexCount,
+        .indexType = primitive.indexType,
+        .material = primitive.material,
+        .transform = nodeTransform,
+        .worldBoundingBox = Extent{
+            glm::mat3(nodeTransform) * primitive.boundingBox.max,
+            glm::mat3(nodeTransform) * primitive.boundingBox.min
+        }
+    };
+}
+
 void RenderEngine::initScene()
 {
     // set global scene constants
@@ -1194,10 +1226,29 @@ void RenderEngine::initScene()
     setSunLuminance(5.f);
 
     // load scene
-    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/Sponza/Sponza.gltf");
+    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/AlphaBlendModeTest.glb");
     loadedGltf = std::make_unique<LoadedGltf>(this, gltfPath.string().c_str());
 
-    std::filesystem::path hdriPath = std::filesystem::current_path() / std::filesystem::path("Assets/shanghai_bund_4k.hdr");
+    // upload draws
+    for (const MeshNode& meshNode : loadedGltf->scene.nodes)
+    {
+        const Mesh& mesh = loadedGltf->meshes[meshNode.mesh];
+        for (const MeshPrimitive& primitive : mesh.primitives)
+        {
+            switch (primitive.flags)
+            {
+            case MaterialFlag_Opaque:
+            case MaterialFlag_AlphaMask:
+                renderQueueOpaque.push_back(getDrawFromPrimitive(primitive, meshNode.transform));
+                break;
+            case MaterialFlag_AlphaBlend:
+                renderQueueAlphaBlend.push_back(getDrawFromPrimitive(primitive, meshNode.transform));
+                break;
+            }
+        }
+    }
+
+    std::filesystem::path hdriPath = std::filesystem::current_path() / std::filesystem::path("Assets/fireplace_4k.hdr");
     loadedGltf->loadHDRSkybox(hdriPath.string().c_str());
 }
 
@@ -1233,14 +1284,9 @@ static Frustum extractViewFrustum(const glm::mat4& viewproj)
 }
 
 // a primitive is not visible if all 8 of its corners are outside one of the planes 
-static bool isVisible(const MeshPrimitive& primitive, const glm::mat4& modelMatrix, const Frustum& viewFrustum)
+static bool isVisible(const DrawCommand& draw, const Frustum& viewFrustum)
 {
-    Extent worldBoundingBox{
-        .max = glm::mat3(modelMatrix) * primitive.boundingBox.max,
-        .min = glm::mat3(modelMatrix) * primitive.boundingBox.min
-    };
-
-    std::array<glm::vec3, 8> corners = worldBoundingBox.getCorners();
+    std::array<glm::vec3, 8> corners = draw.worldBoundingBox.getCorners();
 
     for (glm::vec4 plane : viewFrustum.planes)
     {
@@ -1270,56 +1316,143 @@ void RenderEngine::drawScene(VkCommandBuffer cmd)
         scene.brdfLUT.descriptorSet 
     };
 
+    Frustum viewFrusum = extractViewFrustum(globalSceneData.viewproj);
+
+    // OPAQUE PASS
+    // bind pipeline
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activeOpaquePipeline.pipeline);
+
     vkCmdBindDescriptorSets(
-        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline.layout, 2, 3, envDescriptors,
+        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activeOpaquePipeline.layout, 2, 3, envDescriptors,
         0, nullptr
     );
 
-    Frustum viewFrusum = extractViewFrustum(globalSceneData.viewproj);
+    std::sort(renderQueueOpaque.begin(), renderQueueOpaque.end(),
+              [](const DrawCommand& a, const DrawCommand& b)
+              {
+                  // sort by material index to minimize rebinding
+                  return a.material < b.material;
+              });
 
-    for (const MeshNode& meshNode : loadedGltf->scene.nodes)
+    MaterialHandle currentMaterialHandle = kInvalidHandle;
+    MaterialConstants currentMaterialConstants;
+    for (const DrawCommand& draw : renderQueueOpaque)
     {
-        const Mesh& mesh = loadedGltf->meshes[meshNode.mesh];
-
-        for (const MeshPrimitive& primitive : mesh.primitives)
+        // cull non visible draws
+        if (!isVisible(draw, viewFrusum))
         {
-            // cull non visible primitives
-            if (!isVisible(primitive, meshNode.transform, viewFrusum))
-            {
-                continue;
-            }
+            continue;
+        }
 
-            // bind geometry buffers
-            gfx::AllocatedBuffer vertexBuffer = loadedGltf->buffers[primitive.vertexBuffer];
-            VkDeviceSize vertexBufferOffset{ 0 };
-            vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer.buffer, &vertexBufferOffset);
+        // bind geometry buffers
+        gfx::AllocatedBuffer vertexBuffer = loadedGltf->buffers[draw.vertexBuffer];
+        VkDeviceSize vertexBufferOffset{ 0 };
+        vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer.buffer, &vertexBufferOffset);
 
-            gfx::AllocatedBuffer indexBuffer = loadedGltf->buffers[primitive.indexBuffer];
-            VkDeviceSize indexBufferOffset{ 0 };
-            vkCmdBindIndexBuffer(cmd, indexBuffer.buffer, indexBufferOffset, primitive.indexType);
+        gfx::AllocatedBuffer indexBuffer = loadedGltf->buffers[draw.indexBuffer];
+        VkDeviceSize indexBufferOffset{ 0 };
+        vkCmdBindIndexBuffer(cmd, indexBuffer.buffer, indexBufferOffset, draw.indexType);
 
-            // bind material
-            const Material& material = loadedGltf->materials[primitive.material];
+        // bind material
+        if (currentMaterialHandle != draw.material)
+        {
+            currentMaterialHandle = draw.material;
+            const Material& material = loadedGltf->materials[currentMaterialHandle];
             vkCmdBindDescriptorSets(
-                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline.layout, 
+                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activeOpaquePipeline.layout,
                 1, 1, &material.descriptorSet, 0, nullptr
             );
 
-            // bind push constants
-            PushConstants pushConstants{
-                .model = meshNode.transform,
-                .material = material.constants
-            };
+            currentMaterialConstants = material.constants;
+        }
 
-            vkCmdPushConstants(
-                cmd, activePipeline.layout,
-                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                sizeof(pushConstants), &pushConstants
+        // bind push constants
+        PushConstants pushConstants{
+            .model = draw.transform,
+            .material = currentMaterialConstants
+        };
+
+        vkCmdPushConstants(
+            cmd, activeOpaquePipeline.layout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+            sizeof(pushConstants), &pushConstants
+        );
+
+        // draw primitive
+        vkCmdDrawIndexed(cmd, draw.indexCount, 1, 0, 0, 0);
+    }
+
+    // TRANSPARENT PASS
+    // bind pipeline
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, transparentPipeline.pipeline);
+
+    vkCmdBindDescriptorSets(
+        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, transparentPipeline.layout, 2, 3, envDescriptors,
+        0, nullptr
+    );
+
+    std::sort(renderQueueAlphaBlend.begin(), renderQueueAlphaBlend.end(),
+              [&](const DrawCommand& a, const DrawCommand& b)
+              {
+                  glm::vec3 worldCenterA = a.worldBoundingBox.getCenter();
+                  float depthA = (glm::mat3(globalSceneData.view) * worldCenterA).z;
+
+                  glm::vec3 worldCenterB = b.worldBoundingBox.getCenter();
+                  float depthB = (glm::mat3(globalSceneData.view) * worldCenterB).z;
+
+                  if (depthA == depthB)
+                  {
+                      // sort by material index to minimize rebinding
+                      return a.material < b.material;
+                  }
+                  return depthA < depthB;
+              });
+
+    currentMaterialHandle = kInvalidHandle;
+    for (const DrawCommand& draw : renderQueueAlphaBlend)
+    {
+        // cull non visible draws
+        if (!isVisible(draw, viewFrusum))
+        {
+            continue;
+        }
+
+        // bind geometry buffers
+        gfx::AllocatedBuffer vertexBuffer = loadedGltf->buffers[draw.vertexBuffer];
+        VkDeviceSize vertexBufferOffset{ 0 };
+        vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer.buffer, &vertexBufferOffset);
+
+        gfx::AllocatedBuffer indexBuffer = loadedGltf->buffers[draw.indexBuffer];
+        VkDeviceSize indexBufferOffset{ 0 };
+        vkCmdBindIndexBuffer(cmd, indexBuffer.buffer, indexBufferOffset, draw.indexType);
+
+        // bind material
+        if (currentMaterialHandle != draw.material)
+        {
+            currentMaterialHandle = draw.material;
+            const Material& material = loadedGltf->materials[currentMaterialHandle];
+            vkCmdBindDescriptorSets(
+                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, transparentPipeline.layout,
+                1, 1, &material.descriptorSet, 0, nullptr
             );
 
-            // draw primitive
-            vkCmdDrawIndexed(cmd, primitive.indexCount, 1, 0, 0, 0);
+            currentMaterialConstants = material.constants;
         }
+
+        // bind push constants
+        PushConstants pushConstants{
+            .model = draw.transform,
+            .material = currentMaterialConstants
+        };
+
+        vkCmdPushConstants(
+            cmd, transparentPipeline.layout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+            sizeof(pushConstants), &pushConstants
+        );
+
+        // draw primitive
+        vkCmdDrawIndexed(cmd, draw.indexCount, 1, 0, 0, 0);
     }
 }
 

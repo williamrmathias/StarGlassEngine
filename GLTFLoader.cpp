@@ -112,7 +112,7 @@ void LoadedGltf::initDefaultAssets()
         assert(images.size() == 1);
 
         AssetId id = util::fastHash(&whiteData, static_cast<int>(imageDataSize));
-        imageMap[id] = defaultHandle;
+        imageMap[id] = kDefaultHandle;
     }
 
     {
@@ -173,11 +173,11 @@ void LoadedGltf::initDefaultAssets()
         assert(images.size() == 2);
 
         // map invalidAssetId here
-        imageMap[invalidAssetId] = errorHandle;
+        imageMap[invalidAssetId] = kErrorHandle;
 
         // also map content hash here
         AssetId id = util::fastHash(checkerData, static_cast<int>(imageDataSize));
-        imageMap[id] = errorHandle;
+        imageMap[id] = kErrorHandle;
     }
 
     constexpr uint32_t kNormalMapImageHandle = 2;
@@ -226,7 +226,7 @@ void LoadedGltf::initDefaultAssets()
         assert(images.size() == kNormalMapImageHandle + 1);
 
         AssetId id = util::fastHash(&normData, static_cast<int>(imageDataSize));
-        imageMap[id] = defaultNormalMapHandle;
+        imageMap[id] = kDefaultNormalMapHandle;
     }
 
     {
@@ -236,16 +236,16 @@ void LoadedGltf::initDefaultAssets()
         VkSampler newSampler = gfx::createSampler(engine->device.get(), samplerDescription);
 
         samplers.push_back(newSampler);
-        samplerMap[invalidAssetId] = defaultHandle;
+        samplerMap[invalidAssetId] = kDefaultHandle;
 
         // also map content hash here
         AssetId id = util::fastHash(&samplerDescription, sizeof(samplerDescription));
-        samplerMap[id] = defaultHandle;
+        samplerMap[id] = kDefaultHandle;
     }
 
     {
         // default texture (white texture - default sampler)
-        Texture newTexture = { .image = defaultHandle, .sampler = defaultHandle };
+        Texture newTexture = { .image = kDefaultHandle, .sampler = kDefaultHandle };
 
         // create image view
         newTexture.view = gfx::createImageView(
@@ -254,12 +254,12 @@ void LoadedGltf::initDefaultAssets()
         );
 
         textures.push_back(newTexture);
-        textureMap[invalidAssetId] = defaultHandle;
+        textureMap[invalidAssetId] = kDefaultHandle;
     }
 
     {
         // default texture (bluish texture - default sampler)
-        Texture newTexture = { .image = kNormalMapImageHandle, .sampler = defaultHandle };
+        Texture newTexture = { .image = kNormalMapImageHandle, .sampler = kDefaultHandle };
 
         // create image view
         newTexture.view = gfx::createImageView(
@@ -268,7 +268,7 @@ void LoadedGltf::initDefaultAssets()
         );
 
         textures.push_back(newTexture);
-        textureMap[invalidAssetId] = defaultNormalMapHandle;
+        textureMap[invalidAssetId] = kDefaultNormalMapHandle;
     }
 
     {
@@ -277,7 +277,7 @@ void LoadedGltf::initDefaultAssets()
         setMaterialDescriptor(newMaterial);
 
         materials.push_back(newMaterial);
-        materialMap[invalidAssetId] = defaultHandle;
+        materialMap[invalidAssetId] = kDefaultHandle;
     }
 }
 
@@ -538,7 +538,7 @@ void LoadedGltf::loadTextures(std::span<cgltf_texture> gltfTextures)
 
     for (const cgltf_texture& texture : gltfTextures)
     {
-        Texture newTexture = {.image = errorHandle, .sampler = defaultHandle };
+        Texture newTexture = {.image = kErrorHandle, .sampler = kDefaultHandle };
         if (texture.image)
         {
             newTexture.image = imageMap[getImageId(*texture.image)];
@@ -559,6 +559,21 @@ void LoadedGltf::loadTextures(std::span<cgltf_texture> gltfTextures)
         textureMap[id] = handle;
 
         textures.push_back(newTexture);
+    }
+}
+
+static MaterialFlags getMaterialFlags(const cgltf_material& material)
+{
+    switch (material.alpha_mode)
+    {
+    case cgltf_alpha_mode_opaque:
+        return MaterialFlag_Opaque;
+    case cgltf_alpha_mode_mask:
+        return MaterialFlag_AlphaMask;
+    case cgltf_alpha_mode_blend:
+        return MaterialFlag_AlphaBlend;
+    default:
+        return MaterialFlag_Opaque;
     }
 }
 
@@ -599,7 +614,6 @@ static AssetId getMaterialId(const cgltf_material& material)
 
         util::hashCombine(materialId, baseColorId);
         util::hashCombine(materialId, metalRoughId);
-        return materialId;
     }
 
     if (material.normal_texture.texture)
@@ -609,6 +623,10 @@ static AssetId getMaterialId(const cgltf_material& material)
 
         util::hashCombine(materialId, normalId);
     }
+
+    util::hashCombine(materialId, getMaterialFlags(material));
+    if (material.alpha_mode == cgltf_alpha_mode_mask)
+        util::hashCombine(materialId, util::fastHash(&material.alpha_cutoff, sizeof(cgltf_float)));
 
     // TODO: Other material properties (alpha, double sided etc)
     // TODO: Other material types
@@ -706,10 +724,13 @@ Material Material::initMaterial()
     newMaterial.constants.baseColorFactor = glm::vec4{ 1.f, 1.f, 1.f, 1.f };
     newMaterial.constants.metalnessFactor = 1.f;
     newMaterial.constants.roughnessFactor = 1.f;
+    newMaterial.constants.alphaCutoff = 0.f;
 
-    newMaterial.baseColorTex = defaultHandle;
-    newMaterial.metalRoughTex = defaultHandle;
-    newMaterial.normalTex = defaultNormalMapHandle;
+    newMaterial.flags = MaterialFlag_Opaque;
+
+    newMaterial.baseColorTex = kDefaultHandle;
+    newMaterial.metalRoughTex = kDefaultHandle;
+    newMaterial.normalTex = kDefaultNormalMapHandle;
 
     return newMaterial;
 }
@@ -751,6 +772,11 @@ void LoadedGltf::loadMaterials(std::span<cgltf_material> gltfMaterials)
             newMaterial.normalTex = textureMap[getTextureId(normalTex)];
         }
 
+        if (material.alpha_mode == cgltf_alpha_mode_mask)
+            newMaterial.constants.alphaCutoff = material.alpha_cutoff;
+        else
+            newMaterial.constants.alphaCutoff = 0.f;
+
         // TODO: Other material properties (alpha, double sided etc)
         // TODO: Other material types
 
@@ -775,6 +801,8 @@ LoadedGltf::IndexBufferDesc LoadedGltf::loadIndexBuffer(cgltf_accessor& accessor
     std::vector<uint8_t> indexData;
 
     cgltf_size outComponentSize = cgltf_component_size(accessor.component_type);
+    outComponentSize = std::max(outComponentSize, cgltf_size(2));
+
     cgltf_size indexCount = cgltf_accessor_unpack_indices(&accessor, nullptr, 0, 0);
     indexData.resize(outComponentSize * indexCount);
 
@@ -782,6 +810,7 @@ LoadedGltf::IndexBufferDesc LoadedGltf::loadIndexBuffer(cgltf_accessor& accessor
     VkIndexType indexType = VK_INDEX_TYPE_UINT16;
     switch (accessor.component_type)
     {
+    case cgltf_component_type_r_8u: // pad to u16
     case cgltf_component_type_r_16u:
         indexType = VK_INDEX_TYPE_UINT16;
         break;
@@ -790,6 +819,7 @@ LoadedGltf::IndexBufferDesc LoadedGltf::loadIndexBuffer(cgltf_accessor& accessor
         break;
     default:
         SDL_LogError(0, "Mesh load error: Mesh primitive contains invalid index format");
+        assert(!"Mesh load error: Mesh primitive contains invalid index format");
         break;
     }
 
@@ -864,8 +894,13 @@ LoadedGltf::VertexBufferDesc LoadedGltf::loadVertexBuffer(const cgltf_primitive&
 
         if (positionAcc->has_max)
             maxPosition = glm::max(maxPosition, glm::make_vec3(positionAcc->max));
+        else
+            maxPosition = Vec3::infinity;
+
         if (positionAcc->has_min)
             minPosition = glm::min(minPosition, glm::make_vec3(positionAcc->min));
+        else
+            minPosition = Vec3::minusInfinity;
     }
 
     // normal
@@ -1022,9 +1057,14 @@ std::array<glm::vec3, 8> Extent::getCorners() const
     };
 }
 
+glm::vec3 Extent::getCenter() const
+{
+    return (max + min) * 0.5f;
+}
+
 uint64_t MeshPrimitive::getHash() const
 {
-    assert(sizeof(MeshPrimitive) == 64); // if size changes, check hash
+    assert(sizeof(MeshPrimitive) == 72); // if size changes, check hash
     return util::fastHash(this, sizeof(MeshPrimitive));
 }
 
@@ -1045,10 +1085,10 @@ MeshPrimitive LoadedGltf::createMeshPrimitive(const cgltf_primitive& primitive)
     }
 
     // get index buffer
-    newPrimitive.indexBuffer = defaultHandle;
+    newPrimitive.indexBuffer = kDefaultHandle;
     if (primitive.indices)
     {
-        // TODO: Support non index geometrys
+        // TODO: Support non index geometries
         IndexBufferDesc indexDesc = loadIndexBuffer(*primitive.indices);
         newPrimitive.indexBuffer = indexDesc.handle;
         newPrimitive.indexCount = static_cast<uint32_t>(indexDesc.numIndices);
@@ -1070,10 +1110,15 @@ MeshPrimitive LoadedGltf::createMeshPrimitive(const cgltf_primitive& primitive)
     }
 
     // get material
-    newPrimitive.material = defaultHandle;
+    newPrimitive.material = kDefaultHandle;
     if (primitive.material)
     {
         newPrimitive.material = materialMap[getMaterialId(*primitive.material)];
+        newPrimitive.flags = getMaterialFlags(*primitive.material);
+    }
+    else
+    {
+        newPrimitive.flags = MaterialFlag_Opaque;
     }
 
     return newPrimitive;
@@ -1138,7 +1183,7 @@ static glm::mat4 getNodeMatrix(const cgltf_node& node, const glm::mat4& parentTr
 
 MeshNode LoadedGltf::createMeshNode(const cgltf_mesh& mesh, const glm::mat4& transform)
 {
-    MeshNode newMeshNode{ .mesh = defaultHandle, .transform = transform };
+    MeshNode newMeshNode{ .mesh = kDefaultHandle, .transform = transform };
 
     std::vector<MeshPrimitive> primitives(mesh.primitives_count);
     for (cgltf_size i = 0; i < mesh.primitives_count; i++)
@@ -1407,7 +1452,7 @@ void LoadedGltf::loadHDRSkybox(std::string_view hdriPath)
 
     // write to descriptor set
     VkDescriptorImageInfo hdrEquirecInfo{
-        .sampler = samplers[defaultHandle],
+        .sampler = samplers[kDefaultHandle],
         .imageView = equirect.hdrEquirecView,
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     };
@@ -1501,7 +1546,7 @@ void LoadedGltf::loadHDRSkybox(std::string_view hdriPath)
     // write over descriptor used for equirec
     skybox.descriptorSet = envDescriptors[0];
     VkDescriptorImageInfo skyboxInfo{
-        .sampler = samplers[defaultHandle],
+        .sampler = samplers[kDefaultHandle],
         .imageView = skybox.view,
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     };
@@ -1531,7 +1576,7 @@ void LoadedGltf::loadHDRSkybox(std::string_view hdriPath)
 
     irradianceMap.descriptorSet = envDescriptors[1];
     VkDescriptorImageInfo irradianceInfo{
-        .sampler = samplers[defaultHandle],
+        .sampler = samplers[kDefaultHandle],
         .imageView = irradianceMap.view,
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     };
@@ -1561,7 +1606,7 @@ void LoadedGltf::loadHDRSkybox(std::string_view hdriPath)
 
     prefilteredEnvMap.descriptorSet = envDescriptors[2];
     VkDescriptorImageInfo prefilteredInfo{
-        .sampler = samplers[defaultHandle],
+        .sampler = samplers[kDefaultHandle],
         .imageView = prefilteredEnvMap.view,
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     };
@@ -1589,7 +1634,7 @@ void LoadedGltf::loadHDRSkybox(std::string_view hdriPath)
 
     brdfLUT.descriptorSet = envDescriptors[3];
     VkDescriptorImageInfo brdfLutInfo{
-        .sampler = samplers[defaultHandle],
+        .sampler = samplers[kDefaultHandle],
         .imageView = brdfLUT.view,
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     };
