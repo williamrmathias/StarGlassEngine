@@ -28,7 +28,7 @@ void RenderEngine::init(SDL_Window* window)
 {
     device = std::make_unique<gfx::Device>(window);
 
-    initDepthTarget();
+    initRenderTargets();
 
     initDescriptorPool();
 
@@ -80,14 +80,14 @@ void RenderEngine::render()
 
     // transition color image to color attachment layout
     transitionImageLayoutCoarse(
-        cmd, frame.hdrColorImage.image,
+        cmd, hdrColorTarget.image.image,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_IMAGE_ASPECT_COLOR_BIT
     );
 
     // transition depth image to depth attachment layout
     transitionImageLayoutCoarse(
-        cmd, depthImage.image,
+        cmd, depthTarget.image.image,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
         VK_IMAGE_ASPECT_DEPTH_BIT
     );
@@ -107,7 +107,7 @@ void RenderEngine::render()
     VkRenderingAttachmentInfo colorAttachInfo{
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
         .pNext = nullptr,
-        .imageView = frame.hdrColorView,
+        .imageView = hdrColorTarget.view,
         .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         .resolveMode = VK_RESOLVE_MODE_NONE,
         .resolveImageView = VK_NULL_HANDLE,
@@ -120,7 +120,7 @@ void RenderEngine::render()
     VkRenderingAttachmentInfo depthAttachInfo{
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
         .pNext = nullptr,
-        .imageView = depthView,
+        .imageView = depthTarget.view,
         .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
         .resolveMode = VK_RESOLVE_MODE_NONE,
         .resolveImageView = VK_NULL_HANDLE,
@@ -167,14 +167,14 @@ void RenderEngine::render()
     // end rendering
     vkCmdEndRendering(cmd);
 
-    renderSky(cmd, frame.hdrColorView, depthView, frame.hdrColorImage.extents);
+    renderSky(cmd, hdrColorTarget.view, depthTarget.view, hdrColorTarget.image.extents);
 
     VkImage swapchainImage = device->swapchain.swapchainImages[swapchainIdx];
     VkImageView swapchainImageView = device->swapchain.swapchainImageViews[swapchainIdx];
 
     VkExtent3D colorImageExtent{
-        frame.hdrColorImage.extents.width,
-        frame.hdrColorImage.extents.height,
+        hdrColorTarget.image.extents.width,
+        hdrColorTarget.image.extents.height,
         1
     };
     VkExtent3D swapchainExtent{
@@ -185,7 +185,7 @@ void RenderEngine::render()
 
     // transition hdr color buffer to readable layout for postFX pass
     transitionImageLayoutCoarse(
-        cmd, frame.hdrColorImage.image,
+        cmd, hdrColorTarget.image.image,
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_IMAGE_ASPECT_COLOR_BIT
     );
@@ -274,9 +274,12 @@ void RenderEngine::FrameData::cleanup(gfx::Device* device)
     vkDestroyCommandPool(device->device, commandPool, nullptr);
 
     gfx::destroyAllocatedBuffer(device, uniformBuffer);
+}
 
-    gfx::destroyAllocatedImage(device, hdrColorImage);
-    vkDestroyImageView(device->device, hdrColorView, nullptr);
+void RenderTarget::cleanup(gfx::Device* device)
+{
+    gfx::destroyAllocatedImage(device, image);
+    vkDestroyImageView(device->device, view, nullptr);
 }
 
 void RenderEngine::cleanup()
@@ -326,8 +329,8 @@ void RenderEngine::cleanup()
         skyPipeline.cleanup(device.get());
     }
 
-    destroyAllocatedImage(device.get(), depthImage);
-    vkDestroyImageView(device->device, depthView, nullptr);
+    hdrColorTarget.cleanup(device.get());
+    depthTarget.cleanup(device.get());
 
     vkDestroySampler(device->device, screenSpaceSampler, nullptr);
 
@@ -462,7 +465,7 @@ void RenderEngine::setActiveScreenSpacePipeline(PipelineType pipeline)
     }
 }
 
-RenderEngine::RenderTarget RenderEngine::createHDRColorTarget() const
+RenderTarget RenderEngine::createHDRColorTarget() const
 {
     RenderTarget target;
 
@@ -488,8 +491,10 @@ RenderEngine::RenderTarget RenderEngine::createHDRColorTarget() const
     return target;
 }
 
-void RenderEngine::initDepthTarget()
+RenderTarget RenderEngine::createDepthTarget() const
 {
+    RenderTarget target;
+
     VkFormat depthFormat = VK_FORMAT_D16_UNORM;
 
     // get depth format
@@ -502,13 +507,48 @@ void RenderEngine::initDepthTarget()
         std::abort();
     }
 
-    depthImage = gfx::createAllocatedImage(
+    target.image = gfx::createAllocatedImage(
         device.get(), 
         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 
         depthFormat, device->swapchain.swapchainExtent, /*useMips*/false
     );
 
-    depthView = createImageView(device.get(), depthImage.image, depthImage.format, VK_IMAGE_ASPECT_DEPTH_BIT);
+    target.view = createImageView(device.get(), target.image.image, target.image.format, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+    return target;
+}
+
+RenderTarget RenderEngine::createShadowTarget() const
+{
+    RenderTarget target;
+
+    VkFormat depthFormat = VK_FORMAT_D16_UNORM;
+
+    // get depth format
+    VkFormatProperties formatProps;
+    vkGetPhysicalDeviceFormatProperties(device->physicalDevice, depthFormat, &formatProps);
+    bool supportsFormat = formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    if (!supportsFormat)
+    {
+        SDL_LogError(0, "Shadow image error: format not supported by device\n");
+        std::abort();
+    }
+
+    target.image = gfx::createAllocatedImage(
+        device.get(),
+        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        depthFormat, kShadowMapResolution, /*useMips*/false
+    );
+
+    target.view = createImageView(device.get(), target.image.image, target.image.format, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+    return target;
+}
+
+void RenderEngine::initRenderTargets()
+{
+    hdrColorTarget = createHDRColorTarget();
+    depthTarget = createDepthTarget();
 }
 
 void RenderEngine::initDescriptorPool()
@@ -763,14 +803,7 @@ void RenderEngine::initFrameData()
         vkUpdateDescriptorSets(device->device, 1, &write, 0, nullptr);
     }
 
-    // create hdr color buffers + descriptor sets
-    for (size_t i = 0; i < NUM_FRAMES; i++)
-    {
-        RenderTarget target = createHDRColorTarget();
-        frames[i].hdrColorImage = target.image;
-        frames[i].hdrColorView = target.view;
-    }
-
+    // descriptor sets
     layouts.fill(screenSpaceLayout);
 
     descriptorInfo = VkDescriptorSetAllocateInfo{
@@ -792,7 +825,7 @@ void RenderEngine::initFrameData()
     {
         VkDescriptorImageInfo imageInfo{
             .sampler = screenSpaceSampler,
-            .imageView = frames[i].hdrColorView,
+            .imageView = hdrColorTarget.view,
             .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         };
 
@@ -825,8 +858,8 @@ void RenderEngine::initGraphicsPipelines()
     {
         // opaque pass pipeline
         // render attachments
-        pipelineBuilder.setColorAttachmentFormats(std::span{ &frames[0].hdrColorImage.format, 1});
-        pipelineBuilder.setDepthAttachmentFormat(depthImage.format);
+        pipelineBuilder.setColorAttachmentFormats(std::span{ &hdrColorTarget.image.format, 1});
+        pipelineBuilder.setDepthAttachmentFormat(depthTarget.image.format);
 
         // shader info
         pipelineBuilder.setShaderStages(vertShader, "simpleVS", fragShader, "simplePS");
@@ -985,7 +1018,7 @@ void RenderEngine::initSkyboxPipeline()
     VkShaderModule fragShader = loadShaderModule(fragShaderPath.string().c_str());
 
     // render attachments
-    pipelineBuilder.setColorAttachmentFormats(std::span{ &frames[0].hdrColorImage.format, 1 });
+    pipelineBuilder.setColorAttachmentFormats(std::span{ &hdrColorTarget.image.format, 1 });
 
     // shader info
     pipelineBuilder.setShaderStages(vertShader, "skyboxVS", fragShader, "skyboxPS");
@@ -1022,7 +1055,7 @@ void RenderEngine::initIrradianceConvolutionPipeline()
     VkShaderModule fragShader = loadShaderModule(fragShaderPath.string().c_str());
 
     // render attachments
-    pipelineBuilder.setColorAttachmentFormats(std::span{ &frames[0].hdrColorImage.format, 1 });
+    pipelineBuilder.setColorAttachmentFormats(std::span{ &hdrColorTarget.image.format, 1 });
 
     // shader info
     pipelineBuilder.setShaderStages(vertShader, "irradianceVS", fragShader, "irradiancePS");
@@ -1132,8 +1165,8 @@ void RenderEngine::initSkyPipeline()
     VkShaderModule fragShader = loadShaderModule(fragShaderPath.string().c_str());
 
     // render attachments
-    pipelineBuilder.setColorAttachmentFormats(std::span{ &frames[0].hdrColorImage.format, 1 });
-    pipelineBuilder.setDepthAttachmentFormat(depthImage.format);
+    pipelineBuilder.setColorAttachmentFormats(std::span{ &hdrColorTarget.image.format, 1 });
+    pipelineBuilder.setDepthAttachmentFormat(depthTarget.image.format);
 
     // shader info
     pipelineBuilder.setShaderStages(vertShader, "skyVS", fragShader, "skyPS");
@@ -1226,7 +1259,7 @@ void RenderEngine::initScene()
     setSunLuminance(5.f);
 
     // load scene
-    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/AlphaBlendModeTest.glb");
+    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/Sponza/Sponza.gltf");
     loadedGltf = std::make_unique<LoadedGltf>(this, gltfPath.string().c_str());
 
     // upload draws

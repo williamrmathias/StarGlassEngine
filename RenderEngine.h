@@ -43,8 +43,10 @@
 namespace gfx
 {
 
-static const size_t NUM_FRAMES = 2;
-static const uint32_t NUM_MATERIALS_MAX = 1000;
+constexpr size_t NUM_FRAMES = 2;
+constexpr uint32_t NUM_MATERIALS_MAX = 1000;
+
+constexpr VkExtent2D kShadowMapResolution = VkExtent2D{ 1024, 1024 };
 
 struct GlobalSceneData
 {
@@ -110,6 +112,14 @@ struct DrawCommand
     Extent worldBoundingBox;
 };
 
+struct RenderTarget
+{
+    gfx::AllocatedImage image;
+    VkImageView view;
+
+    void cleanup(Device* device);
+};
+
 class RenderEngine
 {
 public:
@@ -124,8 +134,10 @@ public:
     VkCommandBuffer immediateCommandBuffer;
     VkFence immediateFence;
 
-    AllocatedImage depthImage;
-    VkImageView depthView;
+    // intermediate render targets
+    RenderTarget hdrColorTarget;
+    RenderTarget depthTarget;
+    RenderTarget shadowTarget;
 
     AllocatedImage skybox;
 
@@ -149,8 +161,6 @@ public:
         AllocatedBuffer uniformBuffer;
         VkDescriptorSet globalDescriptorSet;
 
-        AllocatedImage hdrColorImage;
-        VkImageView hdrColorView;
         VkDescriptorSet screenSpaceDescriptorSet;
 
         void cleanup(Device* device);
@@ -220,14 +230,11 @@ private:
     GlobalSceneData globalSceneData;
     float exposure = 1.f;
 
-    struct RenderTarget
-    {
-        gfx::AllocatedImage image;
-        VkImageView view;
-    };
-
     RenderTarget createHDRColorTarget() const;
-    void initDepthTarget();
+    RenderTarget createDepthTarget() const;
+    RenderTarget createShadowTarget() const;
+
+    void initRenderTargets();
     void initDescriptorPool();
     void initImmediateStructures();
     void initFrameData();
