@@ -6,6 +6,8 @@ struct GlobalSceneData
     float4x4 view;
     float4x4 viewproj;
     
+    float4x4 shadowMatrix;
+    
     float3 viewPosition;
     float padding1;
     
@@ -282,7 +284,8 @@ PixelOutput simplePS(VertexOutput input)
     
     // evaluate if alpha cutout should be split into a different pipeline
     // (due to disabling early-Z test)
-    clip(baseColorSample.a - pushConstants.material.alphaCutoff);
+    float alpha = input.color.a * baseColorSample.a;
+    clip(alpha - pushConstants.material.alphaCutoff);
     
     float4 metalRoughSample = metalRoughTex.Sample(metalRoughSampler, input.uv);
     

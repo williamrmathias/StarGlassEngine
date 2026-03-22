@@ -549,6 +549,7 @@ void RenderEngine::initRenderTargets()
 {
     hdrColorTarget = createHDRColorTarget();
     depthTarget = createDepthTarget();
+    shadowTarget = createShadowTarget();
 }
 
 void RenderEngine::initDescriptorPool()

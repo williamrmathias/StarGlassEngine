@@ -53,6 +53,8 @@ struct GlobalSceneData
     glm::mat4 view;
     glm::mat4 viewproj;
 
+    glm::mat4 shadowMatrix;
+
     glm::vec3 viewPosition;
     float padding1;
 
@@ -93,10 +95,19 @@ struct IBLPushConstants
     float roughness;
 };
 
+struct ShadowPushConstant
+{
+    glm::mat4 model;
+    float alphaCutoff;
+
+    float padding[15];
+};
+
 static_assert(sizeof(PushConstants) <= 128);
 static_assert(sizeof(ScreenSpacePushConstants) <= 128);
 static_assert(sizeof(CubeMapPushConstants) <= 128);
 static_assert(sizeof(IBLPushConstants) <= 128);
+static_assert(sizeof(ShadowPushConstant) <= 128);
 
 struct DrawCommand
 {
