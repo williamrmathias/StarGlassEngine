@@ -120,7 +120,7 @@ struct DrawCommand
     MaterialHandle material;
 
     glm::mat4 transform;
-    Extent worldBoundingBox;
+    Extent worldAABB;
 };
 
 struct RenderTarget
@@ -137,6 +137,7 @@ public:
 
     std::unique_ptr<Device> device;
     std::unique_ptr<LoadedGltf> loadedGltf;
+    Extent sceneAABB;
 
     std::vector<DrawCommand> renderQueueOpaque;
     std::vector<DrawCommand> renderQueueAlphaBlend;
@@ -207,6 +208,8 @@ public:
     Pipeline vertNormalPipeline;
     Pipeline uvPipeline;
 
+    Pipeline shadowPipeline;
+
     Pipeline activeSSPipeline;
     Pipeline toneMapPipeline;
     Pipeline passThroughPipeline;
@@ -250,6 +253,7 @@ private:
     void initImmediateStructures();
     void initFrameData();
     void initGraphicsPipelines();
+    void initShadowPipeline();
     void initScreenSpacePipelines();
     void initSkyboxPipeline();
     void initIrradianceConvolutionPipeline();
@@ -261,6 +265,7 @@ private:
 
     void drawScene(VkCommandBuffer cmd);
 
+    void renderShadowMap(VkCommandBuffer cmd);
     void renderSky(VkCommandBuffer cmd, VkImageView colorAttachView, VkImageView depthAttachView, VkExtent2D renderExtent);
     void renderPostFX(VkCommandBuffer cmd, FrameData& frame, VkImageView colorAttachView, VkExtent2D renderExtent);
     void renderImGui(VkCommandBuffer cmd, VkImageView colorAttachView, VkExtent2D renderExtent);

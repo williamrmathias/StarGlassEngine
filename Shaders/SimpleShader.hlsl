@@ -284,7 +284,7 @@ PixelOutput simplePS(VertexOutput input)
     
     // evaluate if alpha cutout should be split into a different pipeline
     // (due to disabling early-Z test)
-    float alpha = input.color.a * baseColorSample.a;
+    const float alpha = input.color.a * baseColorSample.a;
     clip(alpha - pushConstants.material.alphaCutoff);
     
     float4 metalRoughSample = metalRoughTex.Sample(metalRoughSampler, input.uv);
@@ -303,7 +303,7 @@ PixelOutput simplePS(VertexOutput input)
     
     float3 ambient = brdf_IBL(baseColor.rgb, roughness, metalness, viewDirection, lightDirection, normal);
     
-    result.color = float4(radiance + ambient, baseColorSample.a);
+    result.color = float4(radiance + ambient, alpha);
     return result;
 }
 
