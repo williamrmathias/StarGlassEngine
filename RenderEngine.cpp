@@ -114,6 +114,18 @@ void RenderEngine::render()
 
     renderShadowMap(cmd);
 
+    // now that we've rendered the shadow map, make it readable for the main pass
+    transitionImageLayoutCoarse(
+        cmd, shadowTarget.image.image,
+        VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_IMAGE_ASPECT_DEPTH_BIT
+    );
+
+    vkCmdBindDescriptorSets(
+        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activeOpaquePipeline.layout, 5, 1, &frame.shadowMapDescriptorSet,
+        0, nullptr
+    );
+
     // begin rendering
     VkRenderingAttachmentInfo colorAttachInfo{
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -317,6 +329,7 @@ void RenderEngine::cleanup()
     vkDestroyDescriptorSetLayout(device->device, materialLayout, nullptr);
     vkDestroyDescriptorSetLayout(device->device, screenSpaceLayout, nullptr);
     vkDestroyDescriptorSetLayout(device->device, environmentLayout, nullptr);
+    vkDestroyDescriptorSetLayout(device->device, shadowMapLayout, nullptr);
 
     {
         // pipelines
@@ -690,8 +703,27 @@ void RenderEngine::initDescriptorPool()
 
     VK_Check(vkCreateDescriptorSetLayout(device->device, &layoutInfo, nullptr, &environmentLayout));
 
+    // make shadowMap descriptor layout
+    VkDescriptorSetLayoutBinding shadowMapBinding{
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = nullptr
+    };
+
+    layoutInfo = VkDescriptorSetLayoutCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .bindingCount = 1,
+        .pBindings = &shadowMapBinding
+    };
+
+    VK_Check(vkCreateDescriptorSetLayout(device->device, &layoutInfo, nullptr, &shadowMapLayout));
+
     // make descriptor pool
-    std::array<VkDescriptorPoolSize, 4> poolSizes;
+    std::array<VkDescriptorPoolSize, 5> poolSizes;
 
     poolSizes[0] = VkDescriptorPoolSize{
         .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
@@ -713,11 +745,16 @@ void RenderEngine::initDescriptorPool()
         .descriptorCount = 4 // skybox, irradiance map, prefiltered env map, brdf LUT
     };
 
+    poolSizes[4] = VkDescriptorPoolSize{
+        .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = static_cast<uint32_t>(NUM_FRAMES) // shadow map
+    };
+
     VkDescriptorPoolCreateInfo poolInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
-        .maxSets =  3 * NUM_MATERIALS_MAX + NUM_FRAMES + NUM_FRAMES + 4,
+        .maxSets =  3 * NUM_MATERIALS_MAX + NUM_FRAMES + NUM_FRAMES + 4 + NUM_FRAMES,
         .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
         .pPoolSizes = poolSizes.data()
     };
@@ -884,6 +921,45 @@ void RenderEngine::initFrameData()
 
         vkUpdateDescriptorSets(device->device, 1, &write, 0, nullptr);
     }
+
+    layouts.fill(shadowMapLayout);
+
+    descriptorInfo = VkDescriptorSetAllocateInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .pNext = nullptr,
+        .descriptorPool = globalDescriptorPool,
+        .descriptorSetCount = static_cast<uint32_t>(NUM_FRAMES),
+        .pSetLayouts = layouts.data()
+    };
+
+    VK_Check(vkAllocateDescriptorSets(device->device, &descriptorInfo, descriptorSets.data()));
+    for (size_t i = 0; i < NUM_FRAMES; i++)
+        frames[i].shadowMapDescriptorSet = descriptorSets[i];
+
+    // update screen space descriptor sets
+    for (size_t i = 0; i < NUM_FRAMES; i++)
+    {
+        VkDescriptorImageInfo imageInfo{
+            .sampler = screenSpaceSampler,
+            .imageView = shadowTarget.view,
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        };
+
+        VkWriteDescriptorSet write{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = nullptr,
+            .dstSet = frames[i].shadowMapDescriptorSet,
+            .dstBinding = 0,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &imageInfo,
+            .pBufferInfo = nullptr,
+            .pTexelBufferView = nullptr
+        };
+
+        vkUpdateDescriptorSets(device->device, 1, &write, 0, nullptr);
+    }
 }
 
 void RenderEngine::initGraphicsPipelines()
@@ -905,12 +981,13 @@ void RenderEngine::initGraphicsPipelines()
         pipelineBuilder.setShaderStages(vertShader, "simpleVS", fragShader, "simplePS");
         pipelineBuilder.setPushConstantSize(static_cast<uint32_t>(sizeof(PushConstants)));
 
-        std::array<VkDescriptorSetLayout, 5> descriptorSetLayouts = {
+        std::array<VkDescriptorSetLayout, 6> descriptorSetLayouts = {
             globalSceneDataLayout,
             materialLayout, 
             environmentLayout, // irradiance map
             environmentLayout, // prefiltered env map
-            environmentLayout  // brdf lut
+            environmentLayout,  // brdf lut
+            shadowMapLayout
         };
         pipelineBuilder.setDescriptorSetLayouts(descriptorSetLayouts);
 
@@ -1367,7 +1444,7 @@ void RenderEngine::initScene()
     for (const DrawCommand& draw : renderQueueAlphaBlend)
         sceneAABB.expandToContain(draw.worldAABB);
 
-    std::filesystem::path hdriPath = std::filesystem::current_path() / std::filesystem::path("Assets/fireplace_4k.hdr");
+    std::filesystem::path hdriPath = std::filesystem::current_path() / std::filesystem::path("Assets/shanghai_bund_4k.hdr");
     loadedGltf->loadHDRSkybox(hdriPath.string().c_str());
 
     setSunDirection(0.f, 90.f);

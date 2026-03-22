@@ -57,6 +57,12 @@ Texture2D brdfLut;
 [[vk::binding(0, 4)]]
 SamplerState brdfLutSampler;
 
+[[vk::binding(0, 5)]]
+Texture2D shadowMap;
+
+[[vk::binding(0, 5)]]
+SamplerState shadowMapSampler;
+
 struct MaterialConstants
 {
     float4 baseColorFactor;
@@ -86,8 +92,9 @@ struct VertexOutput
 {
     float4 position : SV_Position;
     float3 positionWorld : TEXCOORD0;
-    float3 normal : TEXCOORD1;
-    float2 uv : TEXCOORD2;
+    float3 positionShadow : TEXCOORD1;
+    float3 normal : TEXCOORD2;
+    float2 uv : TEXCOORD3;
     float4 color : COLOR0;
 };
 
@@ -102,6 +109,7 @@ VertexOutput simpleVS(VertexInput input)
     float4x4 mvp = mul(globalSceneData.viewproj, pushConstants.model);
     output.position = mul(mvp, float4(input.position, 1.f));
     output.positionWorld = mul(pushConstants.model, float4(input.position, 1.f)).xyz;
+    output.positionShadow = mul(globalSceneData.shadowMatrix, float4(output.positionWorld, 1.f)).xyz;
     
     float3 N = mul(pushConstants.model, float4(input.normal, 0.f)).xyz;
 
@@ -276,6 +284,18 @@ float3 brdf_IBL(
     return ambient;
 }
 
+float computeShadowFactor(float3 positionShadow)
+{
+    const float currDepth = positionShadow.z;
+    const float2 ndc = positionShadow.xy * float2(0.5f, 0.5f) + float2(0.5f, 0.5f);
+    
+    // this sample represents the closest depth value scene from the light POV
+    const float closestDepth = shadowMap.Sample(shadowMapSampler, ndc);
+    
+    // if the current depth is behind the closest, we are in shadow
+    return currDepth > closestDepth ? 1.f : 0.f;
+}
+
 PixelOutput simplePS(VertexOutput input)
 {
     PixelOutput result;
@@ -302,6 +322,9 @@ PixelOutput simplePS(VertexOutput input)
     float3 radiance = brdf_direct(baseColor.rgb, roughness, metalness, viewDirection, lightDirection, normal);
     
     float3 ambient = brdf_IBL(baseColor.rgb, roughness, metalness, viewDirection, lightDirection, normal);
+    
+    const float shadowFactor = computeShadowFactor(input.positionShadow);
+    radiance = radiance * (1.f - shadowFactor); // TODO conditional skip the direct brdf
     
     result.color = float4(radiance + ambient, alpha);
     return result;

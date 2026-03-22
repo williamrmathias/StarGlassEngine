@@ -160,6 +160,7 @@ public:
     VkDescriptorSetLayout materialLayout;
     VkDescriptorSetLayout screenSpaceLayout;
     VkDescriptorSetLayout environmentLayout;
+    VkDescriptorSetLayout shadowMapLayout;
 
     struct FrameData
     {
@@ -172,7 +173,7 @@ public:
 
         AllocatedBuffer uniformBuffer;
         VkDescriptorSet globalDescriptorSet;
-
+        VkDescriptorSet shadowMapDescriptorSet;
         VkDescriptorSet screenSpaceDescriptorSet;
 
         void cleanup(Device* device);
