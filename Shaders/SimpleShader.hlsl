@@ -1,5 +1,6 @@
 #define PI 3.1415926538
 #define EPSILON 1e-5
+#define SHADOW_DEPTH_BIAS 0.005f
 
 struct GlobalSceneData
 {
@@ -284,16 +285,35 @@ float3 brdf_IBL(
     return ambient;
 }
 
-float computeShadowFactor(float3 positionShadow)
+float computeShadowFactor(float3 positionShadow, float3 normal, float3 lightDir)
 {
     const float currDepth = positionShadow.z;
     const float2 ndc = positionShadow.xy * float2(0.5f, 0.5f) + float2(0.5f, 0.5f);
+    
+    uint width, height;
+    shadowMap.GetDimensions(width, height);
     
     // this sample represents the closest depth value scene from the light POV
     const float closestDepth = shadowMap.Sample(shadowMapSampler, ndc);
     
     // if the current depth is behind the closest, we are in shadow
-    return currDepth > closestDepth ? 1.f : 0.f;
+    // add a angle adjusted bias
+    const float depthBias = max(0.05f * (1 - dot(normal, lightDir)), SHADOW_DEPTH_BIAS);
+    
+    float shadow = 0.f;
+    float2 texelSize = float2(1.f, 1.f) / float2(width, height);
+    
+    for (int x = -1; x <= 1; ++x)
+    {
+        for (int y = -1; y <= 1; ++y)
+        {
+            float pcfDepth = shadowMap.Sample(shadowMapSampler, ndc.xy + float2(x, y) * texelSize);
+            shadow += (currDepth - depthBias) > pcfDepth ? 1.f : 0.f;
+        }
+    }
+    
+
+    return shadow / 9.f;
 }
 
 PixelOutput simplePS(VertexOutput input)
@@ -323,7 +343,7 @@ PixelOutput simplePS(VertexOutput input)
     
     float3 ambient = brdf_IBL(baseColor.rgb, roughness, metalness, viewDirection, lightDirection, normal);
     
-    const float shadowFactor = computeShadowFactor(input.positionShadow);
+    const float shadowFactor = computeShadowFactor(input.positionShadow, input.normal, lightDirection);
     radiance = radiance * (1.f - shadowFactor); // TODO conditional skip the direct brdf
     
     result.color = float4(radiance + ambient, alpha);

@@ -1108,6 +1108,7 @@ void RenderEngine::initShadowPipeline()
     pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
     pipelineBuilder.setSampleCount(VK_SAMPLE_COUNT_1_BIT);
     pipelineBuilder.setDepthMode(VK_TRUE, VK_TRUE);
+    pipelineBuilder.setCullMode(VK_CULL_MODE_FRONT_BIT); // front face culling to fix peter panning
 
     // build pipeline
     shadowPipeline = pipelineBuilder.build(device.get());
@@ -1444,7 +1445,7 @@ void RenderEngine::initScene()
     for (const DrawCommand& draw : renderQueueAlphaBlend)
         sceneAABB.expandToContain(draw.worldAABB);
 
-    std::filesystem::path hdriPath = std::filesystem::current_path() / std::filesystem::path("Assets/shanghai_bund_4k.hdr");
+    std::filesystem::path hdriPath = std::filesystem::current_path() / std::filesystem::path("Assets/qwantani_noon_puresky_4k.hdr");
     loadedGltf->loadHDRSkybox(hdriPath.string().c_str());
 
     setSunDirection(0.f, 90.f);
