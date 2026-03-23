@@ -126,6 +126,8 @@ struct Extent
 
     std::array<glm::vec3, 8> getCorners() const;
     glm::vec3 getCenter() const;
+
+    void expandToContain(const Extent& extent);
 };
 
 struct MeshPrimitive

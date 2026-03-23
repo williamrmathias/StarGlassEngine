@@ -36,5 +36,8 @@
     <FxCompile Include="IntegrateBRDF.hlsl">
       <Filter>Source Files</Filter>
     </FxCompile>
+    <FxCompile Include="Shadow.hlsl">
+      <Filter>Source Files</Filter>
+    </FxCompile>
   </ItemGroup>
 </Project>

@@ -20,6 +20,9 @@ dxc.exe -T ps_6_0 -E prefilterPS -spirv -fspv-debug=vulkan-with-source -Fo Prefi
 dxc.exe -T vs_6_0 -E integrateBRDF_VS -spirv -fspv-debug=vulkan-with-source -Fo IntegrateBRDF_integrateBRDF_VS.spirv IntegrateBRDF.hlsl > IntegrateBRDF_integrateBRDF_VS.log 2>&1
 dxc.exe -T ps_6_0 -E integrateBRDF_PS -spirv -fspv-debug=vulkan-with-source -Fo IntegrateBRDF_integrateBRDF_PS.spirv IntegrateBRDF.hlsl > IntegrateBRDF_integrateBRDF_PS.log 2>&1
 
+dxc.exe -T vs_6_0 -E shadowVS -spirv -fspv-debug=vulkan-with-source -Fo Shadow_shadowVS.spirv Shadow.hlsl > Shadow_shadowVS.log 2>&1
+dxc.exe -T ps_6_0 -E shadowPS -spirv -fspv-debug=vulkan-with-source -Fo Shadow_shadowPS.spirv Shadow.hlsl > Shadow_shadowPS.log 2>&1
+
 dxc.exe -T ps_6_0 -E baseColorDebugPS -fspv-debug=vulkan-with-source -spirv -Fo baseColorDebugPS.spirv SimpleShader.hlsl > baseColorDebugPS.log 2>&1
 dxc.exe -T ps_6_0 -E metalDebugPS -fspv-debug=vulkan-with-source -spirv -Fo metalDebugPS.spirv SimpleShader.hlsl > metalDebugPS.log 2>&1
 dxc.exe -T ps_6_0 -E roughDebugPS -fspv-debug=vulkan-with-source -spirv -Fo roughDebugPS.spirv SimpleShader.hlsl > roughDebugPS.log 2>&1

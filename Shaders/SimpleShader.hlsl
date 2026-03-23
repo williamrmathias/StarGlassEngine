@@ -1,10 +1,13 @@
 #define PI 3.1415926538
 #define EPSILON 1e-5
+#define SHADOW_DEPTH_BIAS 0.005f
 
 struct GlobalSceneData
 {
     float4x4 view;
     float4x4 viewproj;
+    
+    float4x4 shadowMatrix;
     
     float3 viewPosition;
     float padding1;
@@ -55,6 +58,12 @@ Texture2D brdfLut;
 [[vk::binding(0, 4)]]
 SamplerState brdfLutSampler;
 
+[[vk::binding(0, 5)]]
+Texture2D shadowMap;
+
+[[vk::binding(0, 5)]]
+SamplerState shadowMapSampler;
+
 struct MaterialConstants
 {
     float4 baseColorFactor;
@@ -84,8 +93,9 @@ struct VertexOutput
 {
     float4 position : SV_Position;
     float3 positionWorld : TEXCOORD0;
-    float3 normal : TEXCOORD1;
-    float2 uv : TEXCOORD2;
+    float3 positionShadow : TEXCOORD1;
+    float3 normal : TEXCOORD2;
+    float2 uv : TEXCOORD3;
     float4 color : COLOR0;
 };
 
@@ -100,6 +110,7 @@ VertexOutput simpleVS(VertexInput input)
     float4x4 mvp = mul(globalSceneData.viewproj, pushConstants.model);
     output.position = mul(mvp, float4(input.position, 1.f));
     output.positionWorld = mul(pushConstants.model, float4(input.position, 1.f)).xyz;
+    output.positionShadow = mul(globalSceneData.shadowMatrix, float4(output.positionWorld, 1.f)).xyz;
     
     float3 N = mul(pushConstants.model, float4(input.normal, 0.f)).xyz;
 
@@ -274,6 +285,37 @@ float3 brdf_IBL(
     return ambient;
 }
 
+float computeShadowFactor(float3 positionShadow, float3 normal, float3 lightDir)
+{
+    const float currDepth = positionShadow.z;
+    const float2 ndc = positionShadow.xy * float2(0.5f, 0.5f) + float2(0.5f, 0.5f);
+    
+    uint width, height;
+    shadowMap.GetDimensions(width, height);
+    
+    // this sample represents the closest depth value scene from the light POV
+    const float closestDepth = shadowMap.Sample(shadowMapSampler, ndc);
+    
+    // if the current depth is behind the closest, we are in shadow
+    // add a angle adjusted bias
+    const float depthBias = max(0.05f * (1 - dot(normal, lightDir)), SHADOW_DEPTH_BIAS);
+    
+    float shadow = 0.f;
+    float2 texelSize = float2(1.f, 1.f) / float2(width, height);
+    
+    for (int x = -1; x <= 1; ++x)
+    {
+        for (int y = -1; y <= 1; ++y)
+        {
+            float pcfDepth = shadowMap.Sample(shadowMapSampler, ndc.xy + float2(x, y) * texelSize);
+            shadow += (currDepth - depthBias) > pcfDepth ? 1.f : 0.f;
+        }
+    }
+    
+
+    return shadow / 9.f;
+}
+
 PixelOutput simplePS(VertexOutput input)
 {
     PixelOutput result;
@@ -282,7 +324,8 @@ PixelOutput simplePS(VertexOutput input)
     
     // evaluate if alpha cutout should be split into a different pipeline
     // (due to disabling early-Z test)
-    clip(baseColorSample.a - pushConstants.material.alphaCutoff);
+    const float alpha = input.color.a * baseColorSample.a;
+    clip(alpha - pushConstants.material.alphaCutoff);
     
     float4 metalRoughSample = metalRoughTex.Sample(metalRoughSampler, input.uv);
     
@@ -300,7 +343,10 @@ PixelOutput simplePS(VertexOutput input)
     
     float3 ambient = brdf_IBL(baseColor.rgb, roughness, metalness, viewDirection, lightDirection, normal);
     
-    result.color = float4(radiance + ambient, baseColorSample.a);
+    const float shadowFactor = computeShadowFactor(input.positionShadow, input.normal, lightDirection);
+    radiance = radiance * (1.f - shadowFactor); // TODO conditional skip the direct brdf
+    
+    result.color = float4(radiance + ambient, alpha);
     return result;
 }
 

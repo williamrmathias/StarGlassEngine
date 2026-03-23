@@ -1062,6 +1062,17 @@ glm::vec3 Extent::getCenter() const
     return (max + min) * 0.5f;
 }
 
+void Extent::expandToContain(const Extent& extent)
+{
+    max.x = std::max(max.x, extent.max.x);
+    max.y = std::max(max.y, extent.max.y);
+    max.z = std::max(max.z, extent.max.z);
+
+    min.x = std::min(min.x, extent.min.x);
+    min.y = std::min(min.y, extent.min.y);
+    min.z = std::min(min.z, extent.min.z);
+}
+
 uint64_t MeshPrimitive::getHash() const
 {
     assert(sizeof(MeshPrimitive) == 72); // if size changes, check hash

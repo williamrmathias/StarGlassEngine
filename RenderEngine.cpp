@@ -28,7 +28,7 @@ void RenderEngine::init(SDL_Window* window)
 {
     device = std::make_unique<gfx::Device>(window);
 
-    initDepthTarget();
+    initRenderTargets();
 
     initDescriptorPool();
 
@@ -37,6 +37,7 @@ void RenderEngine::init(SDL_Window* window)
     initFrameData();
 
     initGraphicsPipelines();
+    initShadowPipeline();
     initScreenSpacePipelines();
     initSkyboxPipeline();
     initIrradianceConvolutionPipeline();
@@ -78,16 +79,20 @@ void RenderEngine::render()
 
     VK_Check(vkBeginCommandBuffer(cmd, &beginInfo));
 
-    // transition color image to color attachment layout
     transitionImageLayoutCoarse(
-        cmd, frame.hdrColorImage.image,
+        cmd, hdrColorTarget.image.image,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_IMAGE_ASPECT_COLOR_BIT
     );
 
-    // transition depth image to depth attachment layout
     transitionImageLayoutCoarse(
-        cmd, depthImage.image,
+        cmd, depthTarget.image.image,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_ASPECT_DEPTH_BIT
+    );
+
+    transitionImageLayoutCoarse(
+        cmd, shadowTarget.image.image,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
         VK_IMAGE_ASPECT_DEPTH_BIT
     );
@@ -102,12 +107,30 @@ void RenderEngine::render()
         cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activeOpaquePipeline.layout, 0, 1, &frame.globalDescriptorSet, 
         0, nullptr
     );
+    vkCmdBindDescriptorSets(
+        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline.layout, 0, 1, &frame.globalDescriptorSet,
+        0, nullptr
+    );
+
+    renderShadowMap(cmd);
+
+    // now that we've rendered the shadow map, make it readable for the main pass
+    transitionImageLayoutCoarse(
+        cmd, shadowTarget.image.image,
+        VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_IMAGE_ASPECT_DEPTH_BIT
+    );
+
+    vkCmdBindDescriptorSets(
+        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activeOpaquePipeline.layout, 5, 1, &frame.shadowMapDescriptorSet,
+        0, nullptr
+    );
 
     // begin rendering
     VkRenderingAttachmentInfo colorAttachInfo{
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
         .pNext = nullptr,
-        .imageView = frame.hdrColorView,
+        .imageView = hdrColorTarget.view,
         .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         .resolveMode = VK_RESOLVE_MODE_NONE,
         .resolveImageView = VK_NULL_HANDLE,
@@ -120,7 +143,7 @@ void RenderEngine::render()
     VkRenderingAttachmentInfo depthAttachInfo{
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
         .pNext = nullptr,
-        .imageView = depthView,
+        .imageView = depthTarget.view,
         .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
         .resolveMode = VK_RESOLVE_MODE_NONE,
         .resolveImageView = VK_NULL_HANDLE,
@@ -167,14 +190,14 @@ void RenderEngine::render()
     // end rendering
     vkCmdEndRendering(cmd);
 
-    renderSky(cmd, frame.hdrColorView, depthView, frame.hdrColorImage.extents);
+    renderSky(cmd, hdrColorTarget.view, depthTarget.view, hdrColorTarget.image.extents);
 
     VkImage swapchainImage = device->swapchain.swapchainImages[swapchainIdx];
     VkImageView swapchainImageView = device->swapchain.swapchainImageViews[swapchainIdx];
 
     VkExtent3D colorImageExtent{
-        frame.hdrColorImage.extents.width,
-        frame.hdrColorImage.extents.height,
+        hdrColorTarget.image.extents.width,
+        hdrColorTarget.image.extents.height,
         1
     };
     VkExtent3D swapchainExtent{
@@ -185,7 +208,7 @@ void RenderEngine::render()
 
     // transition hdr color buffer to readable layout for postFX pass
     transitionImageLayoutCoarse(
-        cmd, frame.hdrColorImage.image,
+        cmd, hdrColorTarget.image.image,
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_IMAGE_ASPECT_COLOR_BIT
     );
@@ -274,9 +297,12 @@ void RenderEngine::FrameData::cleanup(gfx::Device* device)
     vkDestroyCommandPool(device->device, commandPool, nullptr);
 
     gfx::destroyAllocatedBuffer(device, uniformBuffer);
+}
 
-    gfx::destroyAllocatedImage(device, hdrColorImage);
-    vkDestroyImageView(device->device, hdrColorView, nullptr);
+void RenderTarget::cleanup(gfx::Device* device)
+{
+    gfx::destroyAllocatedImage(device, image);
+    vkDestroyImageView(device->device, view, nullptr);
 }
 
 void RenderEngine::cleanup()
@@ -303,6 +329,7 @@ void RenderEngine::cleanup()
     vkDestroyDescriptorSetLayout(device->device, materialLayout, nullptr);
     vkDestroyDescriptorSetLayout(device->device, screenSpaceLayout, nullptr);
     vkDestroyDescriptorSetLayout(device->device, environmentLayout, nullptr);
+    vkDestroyDescriptorSetLayout(device->device, shadowMapLayout, nullptr);
 
     {
         // pipelines
@@ -316,6 +343,8 @@ void RenderEngine::cleanup()
         vertNormalPipeline.cleanup(device.get());
         uvPipeline.cleanup(device.get());
 
+        shadowPipeline.cleanup(device.get());
+
         toneMapPipeline.cleanup(device.get());
         passThroughPipeline.cleanup(device.get());
 
@@ -326,8 +355,9 @@ void RenderEngine::cleanup()
         skyPipeline.cleanup(device.get());
     }
 
-    destroyAllocatedImage(device.get(), depthImage);
-    vkDestroyImageView(device->device, depthView, nullptr);
+    hdrColorTarget.cleanup(device.get());
+    depthTarget.cleanup(device.get());
+    shadowTarget.cleanup(device.get());
 
     vkDestroySampler(device->device, screenSpaceSampler, nullptr);
 
@@ -396,6 +426,31 @@ void RenderEngine::setSunDirection(float azimuth, float altitude)
         glm::sin(radAltitude),
         cosAltitude * glm::cos(radAzimuth) 
     };
+
+    // light view matrix looking from the light direction towards the origin
+    glm::mat4 shadowView = glm::lookAt(globalSceneData.lightDirection, glm::vec3{ 0.f, 0.f, 0.f }, glm::vec3{0.f, 1.f, 0.f});
+
+    // transform scene AABB into light space
+    std::array<glm::vec3, 8> sceneCorners = sceneAABB.getCorners();
+
+    float minX = FLT_MAX, minY = FLT_MAX, minZ = FLT_MAX;
+    float maxX = -FLT_MAX, maxY = -FLT_MAX, maxZ = -FLT_MAX;
+
+    for (const glm::vec3& corner : sceneCorners)
+    {
+        glm::vec4 lightSpacePos = shadowView * glm::vec4{ corner, 1.f };
+
+        minX = std::min(minX, lightSpacePos.x);
+        minY = std::min(minY, lightSpacePos.y);
+        minZ = std::min(minZ, lightSpacePos.z);
+
+        maxX = std::max(maxX, lightSpacePos.x);
+        maxY = std::max(maxY, lightSpacePos.y);
+        maxZ = std::max(maxZ, lightSpacePos.z);
+    }
+
+    glm::mat4 shadowProj = glm::orthoZO(minX, maxX, minY, maxY, -maxZ, -minZ);
+    globalSceneData.shadowMatrix = shadowProj * shadowView;
 }
 
 void RenderEngine::setSunLuminance(float luminance)
@@ -462,7 +517,7 @@ void RenderEngine::setActiveScreenSpacePipeline(PipelineType pipeline)
     }
 }
 
-RenderEngine::RenderTarget RenderEngine::createHDRColorTarget() const
+RenderTarget RenderEngine::createHDRColorTarget() const
 {
     RenderTarget target;
 
@@ -488,8 +543,10 @@ RenderEngine::RenderTarget RenderEngine::createHDRColorTarget() const
     return target;
 }
 
-void RenderEngine::initDepthTarget()
+RenderTarget RenderEngine::createDepthTarget() const
 {
+    RenderTarget target;
+
     VkFormat depthFormat = VK_FORMAT_D16_UNORM;
 
     // get depth format
@@ -502,13 +559,49 @@ void RenderEngine::initDepthTarget()
         std::abort();
     }
 
-    depthImage = gfx::createAllocatedImage(
+    target.image = gfx::createAllocatedImage(
         device.get(), 
         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 
         depthFormat, device->swapchain.swapchainExtent, /*useMips*/false
     );
 
-    depthView = createImageView(device.get(), depthImage.image, depthImage.format, VK_IMAGE_ASPECT_DEPTH_BIT);
+    target.view = createImageView(device.get(), target.image.image, target.image.format, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+    return target;
+}
+
+RenderTarget RenderEngine::createShadowTarget() const
+{
+    RenderTarget target;
+
+    VkFormat depthFormat = VK_FORMAT_D16_UNORM;
+
+    // get depth format
+    VkFormatProperties formatProps;
+    vkGetPhysicalDeviceFormatProperties(device->physicalDevice, depthFormat, &formatProps);
+    bool supportsFormat = formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    if (!supportsFormat)
+    {
+        SDL_LogError(0, "Shadow image error: format not supported by device\n");
+        std::abort();
+    }
+
+    target.image = gfx::createAllocatedImage(
+        device.get(),
+        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        depthFormat, kShadowMapResolution, /*useMips*/false
+    );
+
+    target.view = createImageView(device.get(), target.image.image, target.image.format, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+    return target;
+}
+
+void RenderEngine::initRenderTargets()
+{
+    hdrColorTarget = createHDRColorTarget();
+    depthTarget = createDepthTarget();
+    shadowTarget = createShadowTarget();
 }
 
 void RenderEngine::initDescriptorPool()
@@ -610,8 +703,27 @@ void RenderEngine::initDescriptorPool()
 
     VK_Check(vkCreateDescriptorSetLayout(device->device, &layoutInfo, nullptr, &environmentLayout));
 
+    // make shadowMap descriptor layout
+    VkDescriptorSetLayoutBinding shadowMapBinding{
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = nullptr
+    };
+
+    layoutInfo = VkDescriptorSetLayoutCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .bindingCount = 1,
+        .pBindings = &shadowMapBinding
+    };
+
+    VK_Check(vkCreateDescriptorSetLayout(device->device, &layoutInfo, nullptr, &shadowMapLayout));
+
     // make descriptor pool
-    std::array<VkDescriptorPoolSize, 4> poolSizes;
+    std::array<VkDescriptorPoolSize, 5> poolSizes;
 
     poolSizes[0] = VkDescriptorPoolSize{
         .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
@@ -633,11 +745,16 @@ void RenderEngine::initDescriptorPool()
         .descriptorCount = 4 // skybox, irradiance map, prefiltered env map, brdf LUT
     };
 
+    poolSizes[4] = VkDescriptorPoolSize{
+        .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = static_cast<uint32_t>(NUM_FRAMES) // shadow map
+    };
+
     VkDescriptorPoolCreateInfo poolInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
-        .maxSets =  3 * NUM_MATERIALS_MAX + NUM_FRAMES + NUM_FRAMES + 4,
+        .maxSets =  3 * NUM_MATERIALS_MAX + NUM_FRAMES + NUM_FRAMES + 4 + NUM_FRAMES,
         .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
         .pPoolSizes = poolSizes.data()
     };
@@ -763,14 +880,7 @@ void RenderEngine::initFrameData()
         vkUpdateDescriptorSets(device->device, 1, &write, 0, nullptr);
     }
 
-    // create hdr color buffers + descriptor sets
-    for (size_t i = 0; i < NUM_FRAMES; i++)
-    {
-        RenderTarget target = createHDRColorTarget();
-        frames[i].hdrColorImage = target.image;
-        frames[i].hdrColorView = target.view;
-    }
-
+    // descriptor sets
     layouts.fill(screenSpaceLayout);
 
     descriptorInfo = VkDescriptorSetAllocateInfo{
@@ -792,7 +902,7 @@ void RenderEngine::initFrameData()
     {
         VkDescriptorImageInfo imageInfo{
             .sampler = screenSpaceSampler,
-            .imageView = frames[i].hdrColorView,
+            .imageView = hdrColorTarget.view,
             .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         };
 
@@ -800,6 +910,45 @@ void RenderEngine::initFrameData()
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .pNext = nullptr,
             .dstSet = frames[i].screenSpaceDescriptorSet,
+            .dstBinding = 0,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &imageInfo,
+            .pBufferInfo = nullptr,
+            .pTexelBufferView = nullptr
+        };
+
+        vkUpdateDescriptorSets(device->device, 1, &write, 0, nullptr);
+    }
+
+    layouts.fill(shadowMapLayout);
+
+    descriptorInfo = VkDescriptorSetAllocateInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .pNext = nullptr,
+        .descriptorPool = globalDescriptorPool,
+        .descriptorSetCount = static_cast<uint32_t>(NUM_FRAMES),
+        .pSetLayouts = layouts.data()
+    };
+
+    VK_Check(vkAllocateDescriptorSets(device->device, &descriptorInfo, descriptorSets.data()));
+    for (size_t i = 0; i < NUM_FRAMES; i++)
+        frames[i].shadowMapDescriptorSet = descriptorSets[i];
+
+    // update screen space descriptor sets
+    for (size_t i = 0; i < NUM_FRAMES; i++)
+    {
+        VkDescriptorImageInfo imageInfo{
+            .sampler = screenSpaceSampler,
+            .imageView = shadowTarget.view,
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        };
+
+        VkWriteDescriptorSet write{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = nullptr,
+            .dstSet = frames[i].shadowMapDescriptorSet,
             .dstBinding = 0,
             .dstArrayElement = 0,
             .descriptorCount = 1,
@@ -825,19 +974,20 @@ void RenderEngine::initGraphicsPipelines()
     {
         // opaque pass pipeline
         // render attachments
-        pipelineBuilder.setColorAttachmentFormats(std::span{ &frames[0].hdrColorImage.format, 1});
-        pipelineBuilder.setDepthAttachmentFormat(depthImage.format);
+        pipelineBuilder.setColorAttachmentFormats(std::span{ &hdrColorTarget.image.format, 1});
+        pipelineBuilder.setDepthAttachmentFormat(depthTarget.image.format);
 
         // shader info
         pipelineBuilder.setShaderStages(vertShader, "simpleVS", fragShader, "simplePS");
         pipelineBuilder.setPushConstantSize(static_cast<uint32_t>(sizeof(PushConstants)));
 
-        std::array<VkDescriptorSetLayout, 5> descriptorSetLayouts = {
+        std::array<VkDescriptorSetLayout, 6> descriptorSetLayouts = {
             globalSceneDataLayout,
             materialLayout, 
             environmentLayout, // irradiance map
             environmentLayout, // prefiltered env map
-            environmentLayout  // brdf lut
+            environmentLayout,  // brdf lut
+            shadowMapLayout
         };
         pipelineBuilder.setDescriptorSetLayouts(descriptorSetLayouts);
 
@@ -861,12 +1011,14 @@ void RenderEngine::initGraphicsPipelines()
 
     {
         // transparent pipeline
+        pipelineBuilder.setDepthMode(VK_TRUE, VK_FALSE);
         BlendState blendState = BlendState::Over;
         pipelineBuilder.setBlendMode(std::span{ &blendState, 1 });
 
         transparentPipeline = pipelineBuilder.build(device.get());
 
         // now reset blending
+        pipelineBuilder.setDepthMode(VK_TRUE, VK_TRUE);
         blendState = BlendState::Disabled;
         pipelineBuilder.setBlendMode(std::span{ &blendState, 1 });
     }
@@ -919,6 +1071,48 @@ void RenderEngine::initGraphicsPipelines()
     }
 
     activeOpaquePipeline = opaquePipeline;
+    vkDestroyShaderModule(device->device, vertShader, nullptr);
+    vkDestroyShaderModule(device->device, fragShader, nullptr);
+}
+
+void RenderEngine::initShadowPipeline()
+{
+    GraphicsPipelineBuilder pipelineBuilder;
+
+    std::filesystem::path vertexShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/Shadow_shadowVS.spirv");
+    VkShaderModule vertShader = loadShaderModule(vertexShaderPath.string().c_str());
+
+    std::filesystem::path fragmentShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/Shadow_shadowPS.spirv");
+    VkShaderModule fragShader = loadShaderModule(fragmentShaderPath.string().c_str());
+
+    // render attachments
+    pipelineBuilder.setDepthAttachmentFormat(shadowTarget.image.format);
+
+    // shader info
+    pipelineBuilder.setShaderStages(vertShader, "shadowVS", fragShader, "shadowPS");
+    pipelineBuilder.setPushConstantSize(static_cast<uint32_t>(sizeof(ShadowPushConstant)));
+
+    std::array<VkDescriptorSetLayout, 2> descriptorSetLayouts = {
+        globalSceneDataLayout,
+        materialLayout
+    };
+    pipelineBuilder.setDescriptorSetLayouts(descriptorSetLayouts);
+
+    // IA info
+    VkVertexInputBindingDescription vertexBindingDesc = Vertex::getInputBindingDescription();
+    std::array<VkVertexInputAttributeDescription, 4> vertexAttribDesc = Vertex::getInputAttributeDescription();
+    pipelineBuilder.setVertexInputState(std::span{ &vertexBindingDesc, 1 }, vertexAttribDesc);
+    pipelineBuilder.setPrimitiveTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+
+    // rasterization info
+    pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
+    pipelineBuilder.setSampleCount(VK_SAMPLE_COUNT_1_BIT);
+    pipelineBuilder.setDepthMode(VK_TRUE, VK_TRUE);
+    pipelineBuilder.setCullMode(VK_CULL_MODE_FRONT_BIT); // front face culling to fix peter panning
+
+    // build pipeline
+    shadowPipeline = pipelineBuilder.build(device.get());
+
     vkDestroyShaderModule(device->device, vertShader, nullptr);
     vkDestroyShaderModule(device->device, fragShader, nullptr);
 }
@@ -985,7 +1179,7 @@ void RenderEngine::initSkyboxPipeline()
     VkShaderModule fragShader = loadShaderModule(fragShaderPath.string().c_str());
 
     // render attachments
-    pipelineBuilder.setColorAttachmentFormats(std::span{ &frames[0].hdrColorImage.format, 1 });
+    pipelineBuilder.setColorAttachmentFormats(std::span{ &hdrColorTarget.image.format, 1 });
 
     // shader info
     pipelineBuilder.setShaderStages(vertShader, "skyboxVS", fragShader, "skyboxPS");
@@ -1022,7 +1216,7 @@ void RenderEngine::initIrradianceConvolutionPipeline()
     VkShaderModule fragShader = loadShaderModule(fragShaderPath.string().c_str());
 
     // render attachments
-    pipelineBuilder.setColorAttachmentFormats(std::span{ &frames[0].hdrColorImage.format, 1 });
+    pipelineBuilder.setColorAttachmentFormats(std::span{ &hdrColorTarget.image.format, 1 });
 
     // shader info
     pipelineBuilder.setShaderStages(vertShader, "irradianceVS", fragShader, "irradiancePS");
@@ -1132,8 +1326,8 @@ void RenderEngine::initSkyPipeline()
     VkShaderModule fragShader = loadShaderModule(fragShaderPath.string().c_str());
 
     // render attachments
-    pipelineBuilder.setColorAttachmentFormats(std::span{ &frames[0].hdrColorImage.format, 1 });
-    pipelineBuilder.setDepthAttachmentFormat(depthImage.format);
+    pipelineBuilder.setColorAttachmentFormats(std::span{ &hdrColorTarget.image.format, 1 });
+    pipelineBuilder.setDepthAttachmentFormat(depthTarget.image.format);
 
     // shader info
     pipelineBuilder.setShaderStages(vertShader, "skyVS", fragShader, "skyPS");
@@ -1199,7 +1393,7 @@ static inline DrawCommand getDrawFromPrimitive(const MeshPrimitive& primitive, c
         .indexType = primitive.indexType,
         .material = primitive.material,
         .transform = nodeTransform,
-        .worldBoundingBox = Extent{
+        .worldAABB = Extent{
             glm::mat3(nodeTransform) * primitive.boundingBox.max,
             glm::mat3(nodeTransform) * primitive.boundingBox.min
         }
@@ -1222,11 +1416,8 @@ void RenderEngine::initScene()
         .lightColor = glm::vec3{1.f, 1.f, 1.f}
     };
 
-    setSunDirection(0.f, 90.f);
-    setSunLuminance(5.f);
-
     // load scene
-    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/AlphaBlendModeTest.glb");
+    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/Sponza/Sponza.gltf");
     loadedGltf = std::make_unique<LoadedGltf>(this, gltfPath.string().c_str());
 
     // upload draws
@@ -1248,8 +1439,17 @@ void RenderEngine::initScene()
         }
     }
 
-    std::filesystem::path hdriPath = std::filesystem::current_path() / std::filesystem::path("Assets/fireplace_4k.hdr");
+    // create scene bounding box
+    for (const DrawCommand& draw : renderQueueOpaque)
+        sceneAABB.expandToContain(draw.worldAABB);
+    for (const DrawCommand& draw : renderQueueAlphaBlend)
+        sceneAABB.expandToContain(draw.worldAABB);
+
+    std::filesystem::path hdriPath = std::filesystem::current_path() / std::filesystem::path("Assets/qwantani_noon_puresky_4k.hdr");
     loadedGltf->loadHDRSkybox(hdriPath.string().c_str());
+
+    setSunDirection(0.f, 90.f);
+    setSunLuminance(5.f);
 }
 
 struct Frustum
@@ -1286,7 +1486,7 @@ static Frustum extractViewFrustum(const glm::mat4& viewproj)
 // a primitive is not visible if all 8 of its corners are outside one of the planes 
 static bool isVisible(const DrawCommand& draw, const Frustum& viewFrustum)
 {
-    std::array<glm::vec3, 8> corners = draw.worldBoundingBox.getCorners();
+    std::array<glm::vec3, 8> corners = draw.worldAABB.getCorners();
 
     for (glm::vec4 plane : viewFrustum.planes)
     {
@@ -1316,7 +1516,7 @@ void RenderEngine::drawScene(VkCommandBuffer cmd)
         scene.brdfLUT.descriptorSet 
     };
 
-    Frustum viewFrusum = extractViewFrustum(globalSceneData.viewproj);
+    Frustum viewFrustum = extractViewFrustum(globalSceneData.viewproj);
 
     // OPAQUE PASS
     // bind pipeline
@@ -1339,7 +1539,7 @@ void RenderEngine::drawScene(VkCommandBuffer cmd)
     for (const DrawCommand& draw : renderQueueOpaque)
     {
         // cull non visible draws
-        if (!isVisible(draw, viewFrusum))
+        if (!isVisible(draw, viewFrustum))
         {
             continue;
         }
@@ -1394,10 +1594,10 @@ void RenderEngine::drawScene(VkCommandBuffer cmd)
     std::sort(renderQueueAlphaBlend.begin(), renderQueueAlphaBlend.end(),
               [&](const DrawCommand& a, const DrawCommand& b)
               {
-                  glm::vec3 worldCenterA = a.worldBoundingBox.getCenter();
+                  glm::vec3 worldCenterA = a.worldAABB.getCenter();
                   float depthA = (glm::mat3(globalSceneData.view) * worldCenterA).z;
 
-                  glm::vec3 worldCenterB = b.worldBoundingBox.getCenter();
+                  glm::vec3 worldCenterB = b.worldAABB.getCenter();
                   float depthB = (glm::mat3(globalSceneData.view) * worldCenterB).z;
 
                   if (depthA == depthB)
@@ -1412,7 +1612,7 @@ void RenderEngine::drawScene(VkCommandBuffer cmd)
     for (const DrawCommand& draw : renderQueueAlphaBlend)
     {
         // cull non visible draws
-        if (!isVisible(draw, viewFrusum))
+        if (!isVisible(draw, viewFrustum))
         {
             continue;
         }
@@ -1454,6 +1654,108 @@ void RenderEngine::drawScene(VkCommandBuffer cmd)
         // draw primitive
         vkCmdDrawIndexed(cmd, draw.indexCount, 1, 0, 0, 0);
     }
+}
+
+void RenderEngine::renderShadowMap(VkCommandBuffer cmd)
+{
+    VkRenderingAttachmentInfo depthAttachInfo{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+        .pNext = nullptr,
+        .imageView = shadowTarget.view,
+        .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+        .resolveMode = VK_RESOLVE_MODE_NONE,
+        .resolveImageView = VK_NULL_HANDLE,
+        .resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .clearValue = VkClearValue{.depthStencil = VkClearDepthStencilValue{.depth = 1.f, .stencil = 1}}
+    };
+
+    VkRenderingInfo renderInfo{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .renderArea = VkRect2D{ VkOffset2D{0, 0}, shadowTarget.image.extents},
+        .layerCount = 1,
+        .viewMask = 0,
+        .colorAttachmentCount = 0,
+        .pColorAttachments = nullptr,
+        .pDepthAttachment = &depthAttachInfo,
+        .pStencilAttachment = nullptr
+    };
+
+    vkCmdBeginRendering(cmd, &renderInfo);
+
+    // set dynamic viewport and scissor state
+    VkViewport viewport{
+        .x = 0.f,
+        .y = 0.f,
+        .width = static_cast<float>(shadowTarget.image.extents.width),
+        .height = static_cast<float>(shadowTarget.image.extents.height),
+        .minDepth = 0.f,
+        .maxDepth = 1.f
+    };
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor{
+        .offset = VkOffset2D{ 0, 0 },
+        .extent = shadowTarget.image.extents
+    };
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    // Frustum viewFrustum = extractViewFrustum(globalSceneData.shadowMatrix);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline.pipeline);
+
+    MaterialHandle currentMaterialHandle = kInvalidHandle;
+    MaterialConstants currentMaterialConstants;
+    for (const DrawCommand& draw : renderQueueOpaque)
+    {
+        // cull non visible draws
+        //if (!isVisible(draw, viewFrustum))
+        //{
+        //    continue;
+        //}
+
+        // bind geometry buffers
+        gfx::AllocatedBuffer vertexBuffer = loadedGltf->buffers[draw.vertexBuffer];
+        VkDeviceSize vertexBufferOffset{ 0 };
+        vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer.buffer, &vertexBufferOffset);
+
+        gfx::AllocatedBuffer indexBuffer = loadedGltf->buffers[draw.indexBuffer];
+        VkDeviceSize indexBufferOffset{ 0 };
+        vkCmdBindIndexBuffer(cmd, indexBuffer.buffer, indexBufferOffset, draw.indexType);
+
+        // bind material
+        if (currentMaterialHandle != draw.material)
+        {
+            currentMaterialHandle = draw.material;
+            const Material& material = loadedGltf->materials[currentMaterialHandle];
+            vkCmdBindDescriptorSets(
+                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline.layout,
+                1, 1, &material.descriptorSet, 0, nullptr
+            );
+
+            currentMaterialConstants = material.constants;
+        }
+
+        // bind push constants
+        ShadowPushConstant pushConstants{
+            .model = draw.transform,
+            .alphaCutoff = currentMaterialConstants.alphaCutoff
+        };
+
+        vkCmdPushConstants(
+            cmd, shadowPipeline.layout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+            sizeof(pushConstants), &pushConstants
+        );
+
+        // draw primitive
+        vkCmdDrawIndexed(cmd, draw.indexCount, 1, 0, 0, 0);
+    }
+
+    vkCmdEndRendering(cmd);
 }
 
 void RenderEngine::renderSky(VkCommandBuffer cmd, VkImageView colorAttachView, VkImageView depthAttachView, VkExtent2D renderExtent)

@@ -43,13 +43,17 @@
 namespace gfx
 {
 
-static const size_t NUM_FRAMES = 2;
-static const uint32_t NUM_MATERIALS_MAX = 1000;
+constexpr size_t NUM_FRAMES = 2;
+constexpr uint32_t NUM_MATERIALS_MAX = 1000;
+
+constexpr VkExtent2D kShadowMapResolution = VkExtent2D{ 1024, 1024 };
 
 struct GlobalSceneData
 {
     glm::mat4 view;
     glm::mat4 viewproj;
+
+    glm::mat4 shadowMatrix;
 
     glm::vec3 viewPosition;
     float padding1;
@@ -91,10 +95,19 @@ struct IBLPushConstants
     float roughness;
 };
 
+struct ShadowPushConstant
+{
+    glm::mat4 model;
+    float alphaCutoff;
+
+    float padding[15];
+};
+
 static_assert(sizeof(PushConstants) <= 128);
 static_assert(sizeof(ScreenSpacePushConstants) <= 128);
 static_assert(sizeof(CubeMapPushConstants) <= 128);
 static_assert(sizeof(IBLPushConstants) <= 128);
+static_assert(sizeof(ShadowPushConstant) <= 128);
 
 struct DrawCommand
 {
@@ -107,7 +120,15 @@ struct DrawCommand
     MaterialHandle material;
 
     glm::mat4 transform;
-    Extent worldBoundingBox;
+    Extent worldAABB;
+};
+
+struct RenderTarget
+{
+    gfx::AllocatedImage image;
+    VkImageView view;
+
+    void cleanup(Device* device);
 };
 
 class RenderEngine
@@ -116,6 +137,7 @@ public:
 
     std::unique_ptr<Device> device;
     std::unique_ptr<LoadedGltf> loadedGltf;
+    Extent sceneAABB;
 
     std::vector<DrawCommand> renderQueueOpaque;
     std::vector<DrawCommand> renderQueueAlphaBlend;
@@ -124,8 +146,10 @@ public:
     VkCommandBuffer immediateCommandBuffer;
     VkFence immediateFence;
 
-    AllocatedImage depthImage;
-    VkImageView depthView;
+    // intermediate render targets
+    RenderTarget hdrColorTarget;
+    RenderTarget depthTarget;
+    RenderTarget shadowTarget;
 
     AllocatedImage skybox;
 
@@ -136,6 +160,7 @@ public:
     VkDescriptorSetLayout materialLayout;
     VkDescriptorSetLayout screenSpaceLayout;
     VkDescriptorSetLayout environmentLayout;
+    VkDescriptorSetLayout shadowMapLayout;
 
     struct FrameData
     {
@@ -148,9 +173,7 @@ public:
 
         AllocatedBuffer uniformBuffer;
         VkDescriptorSet globalDescriptorSet;
-
-        AllocatedImage hdrColorImage;
-        VkImageView hdrColorView;
+        VkDescriptorSet shadowMapDescriptorSet;
         VkDescriptorSet screenSpaceDescriptorSet;
 
         void cleanup(Device* device);
@@ -186,6 +209,8 @@ public:
     Pipeline vertNormalPipeline;
     Pipeline uvPipeline;
 
+    Pipeline shadowPipeline;
+
     Pipeline activeSSPipeline;
     Pipeline toneMapPipeline;
     Pipeline passThroughPipeline;
@@ -220,18 +245,16 @@ private:
     GlobalSceneData globalSceneData;
     float exposure = 1.f;
 
-    struct RenderTarget
-    {
-        gfx::AllocatedImage image;
-        VkImageView view;
-    };
-
     RenderTarget createHDRColorTarget() const;
-    void initDepthTarget();
+    RenderTarget createDepthTarget() const;
+    RenderTarget createShadowTarget() const;
+
+    void initRenderTargets();
     void initDescriptorPool();
     void initImmediateStructures();
     void initFrameData();
     void initGraphicsPipelines();
+    void initShadowPipeline();
     void initScreenSpacePipelines();
     void initSkyboxPipeline();
     void initIrradianceConvolutionPipeline();
@@ -243,6 +266,7 @@ private:
 
     void drawScene(VkCommandBuffer cmd);
 
+    void renderShadowMap(VkCommandBuffer cmd);
     void renderSky(VkCommandBuffer cmd, VkImageView colorAttachView, VkImageView depthAttachView, VkExtent2D renderExtent);
     void renderPostFX(VkCommandBuffer cmd, FrameData& frame, VkImageView colorAttachView, VkExtent2D renderExtent);
     void renderImGui(VkCommandBuffer cmd, VkImageView colorAttachView, VkExtent2D renderExtent);
