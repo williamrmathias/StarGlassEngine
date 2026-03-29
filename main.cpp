@@ -71,6 +71,20 @@ int main()
         ImGui::NewFrame();
         if (ImGui::Begin("StarGlass Engine - Editor"))
         {
+            if (ImGui::CollapsingHeader("Stats"))
+            {
+                ImGui::Text("GLTF Load Time (ms): %u", renderEngine.loadedGltf->stats.loadTimeMS);
+                ImGui::Text("GLTF Image Load Time (ms): %u", renderEngine.loadedGltf->stats.imageLoadTime);
+                ImGui::Text("GLTF Image Load Task Wait Time (ms): %u", renderEngine.loadedGltf->stats.imageLoadTaskWaitTime);
+                ImGui::Text("GLTF Image Load Count: %u", renderEngine.loadedGltf->stats.imageLoadCount);
+                ImGui::Text("GLTF Mesh Load Time (ms): %u", renderEngine.loadedGltf->stats.meshLoadTime);
+                ImGui::Text("GLTF Buffer Load Count: %u", renderEngine.loadedGltf->stats.bufferLoadCount);
+                ImGui::Text("GLTF Material Load Time (ms): %u", renderEngine.loadedGltf->stats.materialLoadTime);
+                ImGui::Text("GLTF Material Descriptor Count: %u", renderEngine.loadedGltf->stats.materialDescriptorCount);
+
+                ImGui::Text("GLTF Scene Load Time (ms): %u", renderEngine.loadedGltf->stats.sceneLoadTime);
+            }
+
             if (ImGui::CollapsingHeader("Global Scene Settings"))
             {
                 // azimuth: 0 to 360 degrees - where 0 is the angle of north

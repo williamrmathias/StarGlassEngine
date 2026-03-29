@@ -5,6 +5,7 @@
 #include "GLTFLoader.h"
 #include "RenderEngine.h"
 #include "Resource.h"
+#include "ThreadPool.h"
 
 // cgltf
 #define CGLTF_IMPLEMENTATION
@@ -312,34 +313,45 @@ struct ScopedSTBImage
     }
 };
 
-// all images are loaded in format r8g8b8a8 unorm
-// they're all uploaded to the GPU at the return of this function
-void LoadedGltf::loadImages(std::span<cgltf_image> gltfImages)
+struct ImageLoadTaskPayload
 {
-    images.reserve(images.size() + gltfImages.size());
+    stbi_uc* data;
+    int width, height;
+};
+
+struct ImageLoadTaskData
+{
+    std::filesystem::path path;
+    cgltf_image* images;
+    uint32_t imageCount;
+
+    ImageLoadTaskPayload* payloads;
+};
+
+void LoadImageTask(void* data)
+{
+    ImageLoadTaskData* taskData = reinterpret_cast<ImageLoadTaskData*>(data);
+
     std::filesystem::path imageUriPath;
     std::string decodedURI;
 
-    for (const cgltf_image& image : gltfImages)
+    for (uint32_t imageIdx = 0; imageIdx < taskData->imageCount; ++imageIdx)
     {
-        ScopedSTBImage<stbi_uc> imageData{ nullptr };
-        VkDeviceSize imageDataSize = 0;
-        int width, height, nChannels;
+        const cgltf_image& image = taskData->images[imageIdx];
+        ImageLoadTaskPayload& payload = taskData->payloads[imageIdx];
+
+        int width = 0;
+        int height = 0;
+        int nChannels = 0;
 
         if (image.uri)
         {
             util::scratchDecodeURI(image.uri, decodedURI);
-            imageUriPath = path.parent_path() / decodedURI;
-            imageData.data = stbi_load(
+            imageUriPath = taskData->path.parent_path() / decodedURI;
+            payload.data = stbi_load(
                 imageUriPath.string().c_str(),
                 &width, &height, &nChannels, STBI_rgb_alpha
             );
-            if (!imageData.data)
-            {
-                // use error fallback image
-                SDL_LogError(0, "GLTF load error: input image has invalid uri: %s", image.name);
-                continue;
-            }
         }
         else if (image.buffer_view)
         {
@@ -347,19 +359,73 @@ void LoadedGltf::loadImages(std::span<cgltf_image> gltfImages)
             cgltf_buffer* buffer = bufferView->buffer;
             const uint8_t* data = static_cast<uint8_t*>(buffer->data) + bufferView->offset;
 
-            imageData.data = stbi_load_from_memory(
+            payload.data = stbi_load_from_memory(
                 data, static_cast<int>(bufferView->size),
                 &width, &height, &nChannels, STBI_rgb_alpha
             );
         }
         else
         {
-            // use error fallback image
             SDL_LogError(0, "GLTF load error: input image has no resource view: %s", image.name);
-            continue;
+            SDL_assert(!"GLTF load error: input image has no resource view");
         }
 
-        imageDataSize = static_cast<VkDeviceSize>(width * height * STBI_rgb_alpha);
+        if (!payload.data)
+        {
+            SDL_LogError(0, "GLTF load error: input image has invalid uri: %s", image.name);
+            SDL_assert(!"GLTF load error : input image has invalid uri");
+        }
+
+        payload.height = height;
+        payload.width = width;
+    }
+}
+
+// all images are loaded in format r8g8b8a8 unorm
+// they're all uploaded to the GPU at the return of this function
+void LoadedGltf::loadImages(std::span<cgltf_image> gltfImages)
+{
+    if (gltfImages.size() == 0)
+        return;
+
+    Uint64 start = SDL_GetTicks64();
+
+    images.reserve(images.size() + gltfImages.size());
+    std::filesystem::path imageUriPath;
+    std::string decodedURI;
+
+    std::vector<ImageLoadTaskPayload> payloads(gltfImages.size());
+
+    const size_t numImagesPerTask = (gltfImages.size() + kMaxTasks - 1) / kMaxTasks;
+    std::vector<ImageLoadTaskData> taskDatas((gltfImages.size() + numImagesPerTask - 1) / numImagesPerTask); // force round up
+
+    for (size_t taskIdx = 0; taskIdx < taskDatas.size(); ++taskIdx)
+    {
+        ImageLoadTaskData& taskData = taskDatas[taskIdx];
+        taskData.path = path;
+        taskData.images = gltfImages.data() + (taskIdx * numImagesPerTask);
+        taskData.imageCount = std::min(gltfImages.size() - (taskIdx * numImagesPerTask), numImagesPerTask);
+        taskData.payloads = payloads.data() + (taskIdx * numImagesPerTask);
+    }
+
+    // index at 1 - this thread will complete the 0 index task
+    for (size_t taskIdx = 1; taskIdx < taskDatas.size(); ++taskIdx)
+    {
+        ImageLoadTaskData& taskData = taskDatas[taskIdx];
+        threadPool.submitTask({ LoadImageTask, &taskData });
+    }
+
+    LoadImageTask(&taskDatas[0]); // we know taskDatas.size() > 0 btw
+
+    threadPool.waitOnTasks();
+    stats.imageLoadTaskWaitTime = SDL_GetTicks64() - start;
+
+    for (size_t imageIdx = 0; imageIdx < gltfImages.size(); ++imageIdx)
+    {
+        const cgltf_image& image = gltfImages[imageIdx];
+        const ImageLoadTaskPayload& payload = payloads[imageIdx];
+
+        VkDeviceSize imageDataSize = static_cast<VkDeviceSize>(payload.width * payload.height * STBI_rgb_alpha);
         gfx::Device* device = engine->device.get();
 
         gfx::AllocatedBuffer stagingBuffer = gfx::createAllocatedBuffer(
@@ -367,12 +433,12 @@ void LoadedGltf::loadImages(std::span<cgltf_image> gltfImages)
             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
         );
 
-        gfx::writeToAllocatedBuffer(device, imageData.data, imageDataSize, stagingBuffer);
+        gfx::writeToAllocatedBuffer(device, payload.data, imageDataSize, stagingBuffer);
 
         gfx::AllocatedImage newImage = gfx::createAllocatedImage(
-            device, 
+            device,
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-            VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ static_cast<uint32_t>(width), static_cast<uint32_t>(height) },
+            VK_FORMAT_R8G8B8A8_UNORM, VkExtent2D{ static_cast<uint32_t>(payload.width), static_cast<uint32_t>(payload.height) },
             /*useMips*/true
         );
 
@@ -401,7 +467,8 @@ void LoadedGltf::loadImages(std::span<cgltf_image> gltfImages)
             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_IMAGE_ASPECT_COLOR_BIT
         );
-       engine->endAndSubmitImmediateCommands();
+        engine->endAndSubmitImmediateCommands();
+        stats.imageLoadCount++;
 
         gfx::destroyAllocatedBuffer(device, stagingBuffer);
 
@@ -411,6 +478,7 @@ void LoadedGltf::loadImages(std::span<cgltf_image> gltfImages)
 
         images.push_back(newImage);
     }
+    stats.imageLoadTime = SDL_GetTicks64() - start;
 }
 
 static gfx::SamplerDesc extractSamplerDesc(
@@ -715,6 +783,8 @@ void LoadedGltf::setMaterialDescriptor(Material& material)
         static_cast<uint32_t>(writeSets.size()), writeSets.data(),
         0, nullptr
     );
+
+    stats.materialDescriptorCount++;
 }
 
 Material Material::initMaterial()
@@ -737,6 +807,8 @@ Material Material::initMaterial()
 
 void LoadedGltf::loadMaterials(std::span<cgltf_material> gltfMaterials)
 {
+    Uint64 start = SDL_GetTicks64();
+
     materials.reserve(gltfMaterials.size());
 
     for (const cgltf_material& material : gltfMaterials)
@@ -789,6 +861,8 @@ void LoadedGltf::loadMaterials(std::span<cgltf_material> gltfMaterials)
 
         materials.push_back(newMaterial);
     }
+
+    stats.materialLoadTime = SDL_GetTicks64() - start;
 }
 
 static AssetId getBufferId(const void* data, size_t dataSize)
@@ -854,6 +928,7 @@ LoadedGltf::IndexBufferDesc LoadedGltf::loadIndexBuffer(cgltf_accessor& accessor
     VkCommandBuffer cmd = engine->startImmediateCommands();
     copyBufferToBuffer(cmd, stagingBuffer, newBuffer, dataSize);
     engine->endAndSubmitImmediateCommands();
+    stats.bufferLoadCount++;
 
     gfx::destroyAllocatedBuffer(engine->device.get(), stagingBuffer);
 
@@ -1032,6 +1107,7 @@ LoadedGltf::VertexBufferDesc LoadedGltf::loadVertexBuffer(const cgltf_primitive&
     VkCommandBuffer cmd = engine->startImmediateCommands();
     copyBufferToBuffer(cmd, stagingBuffer, newBuffer, dataSize);
     engine->endAndSubmitImmediateCommands();
+    stats.bufferLoadCount++;
 
     gfx::destroyAllocatedBuffer(engine->device.get(), stagingBuffer);
 
@@ -1148,6 +1224,8 @@ static AssetId getMeshId(std::span<MeshPrimitive> primitives)
 // Meaning they aren't loaded until the first primitive that needs it is processed
 void LoadedGltf::loadMeshes(std::span<cgltf_mesh> gltfMeshes)
 {
+    Uint64 start = SDL_GetTicks64();
+
     for (const cgltf_mesh& mesh : gltfMeshes)
     {
         Mesh newMesh;
@@ -1169,6 +1247,8 @@ void LoadedGltf::loadMeshes(std::span<cgltf_mesh> gltfMeshes)
         meshMap[meshId] = handle;
         meshes.push_back(newMesh);
     }
+
+    stats.meshLoadTime = SDL_GetTicks64() - start;
 }
 
 static glm::mat4 getNodeMatrix(const cgltf_node& node, const glm::mat4& parentTransform)
@@ -1678,13 +1758,21 @@ void LoadedGltf::loadHDRSkybox(std::string_view hdriPath)
 
 void LoadedGltf::loadScene(const cgltf_scene& gltfScene)
 {
+    Uint64 start = SDL_GetTicks64();
+
     Scene& newScene = scene;
     std::vector<cgltf_node*> nodeStack;
+    nodeStack.reserve(2048);
+
     std::vector<glm::mat4> transformStack;
+    transformStack.reserve(2048);
+
     for (cgltf_size i = 0; i < gltfScene.nodes_count; i++)
     {
         nodeStack.push_back(gltfScene.nodes[i]);
         transformStack.push_back(glm::identity<glm::mat4>());
+        stats.sceneNodeCount++;
+
         while (!nodeStack.empty())
         {
             cgltf_node* node = nodeStack.back();
@@ -1707,6 +1795,8 @@ void LoadedGltf::loadScene(const cgltf_scene& gltfScene)
             }
         }
     }
+
+    stats.sceneLoadTime = SDL_GetTicks64() - start;
 }
 
 struct ScopedGLTFData
@@ -1724,6 +1814,8 @@ struct ScopedGLTFData
 LoadedGltf::LoadedGltf(gfx::RenderEngine* renderEngine, std::string_view gltfPath)
     : engine(renderEngine), path(gltfPath)
 {
+    Uint64 startTicks = SDL_GetTicks64();
+
     cgltf_options options{}; // default loading options
     ScopedGLTFData gltfData;
 
@@ -1753,6 +1845,8 @@ LoadedGltf::LoadedGltf(gfx::RenderEngine* renderEngine, std::string_view gltfPat
 
     if (gltfData->scene)
         loadScene(*gltfData->scene);
+
+    stats.loadTimeMS = SDL_GetTicks64() - startTicks;
 }
 
 void Texture::cleanup(gfx::Device* device)
