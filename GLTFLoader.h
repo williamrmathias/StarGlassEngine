@@ -2,6 +2,7 @@
 
 // sge
 #include "Resource.h"
+#include "ThreadPool.h"
 
 // stl
 #include <optional>
@@ -187,6 +188,21 @@ struct Scene
     TextureLUT brdfLUT;
 };
 
+struct LoadingStats
+{
+    uint64_t loadGLTFTimeMS = 0;
+    uint64_t loadHDRSkyboxTimeMS = 0;
+
+    uint64_t imageLoadTime = 0;
+    uint64_t imageLoadCount = 0;
+
+    uint64_t meshLoadTime = 0;
+    uint64_t bufferLoadCount = 0;
+
+    uint64_t materialLoadTime = 0;
+    uint64_t materialDescriptorCount = 0;
+};
+
 /*
 * A GLTF file loaded into CPU memory
 */
@@ -218,6 +234,9 @@ public:
     std::unordered_map<AssetId, MeshHandle> meshMap;
 
     Scene scene;
+    ThreadPool threadPool;
+
+    LoadingStats stats;
 
 private:
     gfx::RenderEngine* engine;
