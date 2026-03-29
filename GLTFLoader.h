@@ -190,10 +190,10 @@ struct Scene
 
 struct LoadingStats
 {
-    uint64_t loadTimeMS = 0;
+    uint64_t loadGLTFTimeMS = 0;
+    uint64_t loadHDRSkyboxTimeMS = 0;
 
     uint64_t imageLoadTime = 0;
-    uint64_t imageLoadTaskWaitTime = 0;
     uint64_t imageLoadCount = 0;
 
     uint64_t meshLoadTime = 0;
@@ -201,9 +201,6 @@ struct LoadingStats
 
     uint64_t materialLoadTime = 0;
     uint64_t materialDescriptorCount = 0;
-
-    uint64_t sceneLoadTime = 0;
-    uint64_t sceneNodeCount = 0;
 };
 
 /*
