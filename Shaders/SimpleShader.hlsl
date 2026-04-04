@@ -285,7 +285,26 @@ float3 brdf_IBL(
     return ambient;
 }
 
-float computeShadowFactor(float3 positionShadow, float3 normal, float3 lightDir)
+// A simple pseudorandom noise function based on screen position
+float getRandom(float2 pos)
+{
+    return frac(sin(dot(pos, float2(12.9898f, 78.233f))) * 43758.5453f);
+}
+
+// Pre-computed Poisson Disk (16 samples)
+static const float2 poissonDisk[16] =
+{
+    float2(-0.94201624, -0.39906216), float2(0.94558609, -0.76890725),
+    float2(-0.09418410, -0.92938870), float2(0.34495938, 0.29387760),
+    float2(-0.91588001, 0.45771432), float2(-0.81544232, -0.87912464),
+    float2(-0.38277545, 0.27676845), float2(0.97484398, 0.75648379),
+    float2(0.44323325, -0.97511554), float2(0.53742981, -0.47373420),
+    float2(-0.26496911, -0.41893023), float2(0.79197514, 0.19090188),
+    float2(-0.24188840, 0.99706507), float2(-0.81409955, 0.91437590),
+    float2(0.19984126, 0.78641367), float2(0.14383161, -0.14100790)
+};
+
+float computeShadowFactor(float3 positionShadow, float3 normal, float3 lightDir, float2 screenUV)
 {
     const float currDepth = positionShadow.z;
     const float2 ndc = positionShadow.xy * float2(0.5f, 0.5f) + float2(0.5f, 0.5f);
@@ -293,27 +312,32 @@ float computeShadowFactor(float3 positionShadow, float3 normal, float3 lightDir)
     uint width, height;
     shadowMap.GetDimensions(width, height);
     
-    // this sample represents the closest depth value scene from the light POV
-    const float closestDepth = shadowMap.Sample(shadowMapSampler, ndc);
-    
     // if the current depth is behind the closest, we are in shadow
     // add a angle adjusted bias
-    const float depthBias = max(0.05f * (1 - dot(normal, lightDir)), SHADOW_DEPTH_BIAS);
+    const float depthBias = lerp(0.05f, 0.f, dot(normal, lightDir));
     
     float shadow = 0.f;
     float2 texelSize = float2(1.f, 1.f) / float2(width, height);
     
-    for (int x = -1; x <= 1; ++x)
-    {
-        for (int y = -1; y <= 1; ++y)
-        {
-            float pcfDepth = shadowMap.Sample(shadowMapSampler, ndc.xy + float2(x, y) * texelSize);
-            shadow += (currDepth - depthBias) > pcfDepth ? 1.f : 0.f;
-        }
-    }
+    // randomly rotate poisson disk
+    float randomAngle = getRandom(screenUV.xy) * PI * 2.f;
+    float cosAngle = 0.f;
+    float sinAngle = 0.f;
+    sincos(randomAngle, sinAngle, cosAngle);
     
+    float2x2 rotationMatrix = float2x2(cosAngle, -sinAngle, sinAngle, cosAngle);
+    
+    #define NUM_SAMPLES 16
+    for (int i = 0; i < NUM_SAMPLES; ++i)
+    {
+        // rotate poisson offset and sample
+        float2 offset = mul(poissonDisk[i], rotationMatrix);
+        
+        float pcfDepth = shadowMap.Sample(shadowMapSampler, ndc + offset * texelSize * 3.f).r;
+        shadow += (currDepth - depthBias) > pcfDepth ? 1.f : 0.f;
+    }
 
-    return shadow / 9.f;
+    return shadow / float(NUM_SAMPLES);
 }
 
 PixelOutput simplePS(VertexOutput input)
@@ -343,7 +367,7 @@ PixelOutput simplePS(VertexOutput input)
     
     float3 ambient = brdf_IBL(baseColor.rgb, roughness, metalness, viewDirection, lightDirection, normal);
     
-    const float shadowFactor = computeShadowFactor(input.positionShadow, input.normal, lightDirection);
+    const float shadowFactor = computeShadowFactor(input.positionShadow, input.normal, lightDirection, input.position.xy);
     radiance = radiance * (1.f - shadowFactor); // TODO conditional skip the direct brdf
     
     result.color = float4(radiance + ambient, alpha);

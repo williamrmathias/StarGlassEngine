@@ -46,7 +46,7 @@ namespace gfx
 constexpr size_t NUM_FRAMES = 2;
 constexpr uint32_t NUM_MATERIALS_MAX = 1000;
 
-constexpr VkExtent2D kShadowMapResolution = VkExtent2D{ 1024, 1024 };
+constexpr VkExtent2D kShadowMapResolution = VkExtent2D{ 4096, 4096 };
 
 struct GlobalSceneData
 {
