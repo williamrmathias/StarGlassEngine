@@ -414,6 +414,92 @@ void RenderEngine::endAndSubmitImmediateCommands()
     VK_Check(vkWaitForFences(device->device, 1, &immediateFence, true, 9'999'999'999));
 }
 
+static glm::mat4 computeShadowMatrix(const glm::vec3& lightDir, const glm::mat4& viewproj, const Extent& sceneAABB)
+{
+    // light view matrix looking from the light direction towards the origin
+    glm::vec3 up = lightDir.y == 1.f || lightDir.y == -1.f ? glm::vec3{ 0.f, 0.f, 1.f } : glm::vec3{ 0.f, 1.f, 0.f };
+    glm::mat4 shadowView = glm::lookAt(lightDir, glm::vec3{ 0.f, 0.f, 0.f }, up);
+
+    // transform view frustum into light space
+    // NDC = [-1,1]x[-1,1]x[0,1]
+    glm::vec4 viewCorners[8] = {
+        {-1.0f, -1.0f, 0.0f, 1.0f},
+        { 1.0f, -1.0f, 0.0f, 1.0f},
+        { 1.0f,  1.0f, 0.0f, 1.0f},
+        {-1.0f,  1.0f, 0.0f, 1.0f},
+        {-1.0f, -1.0f, 1.0f, 1.0f},
+        { 1.0f, -1.0f, 1.0f, 1.0f},
+        { 1.0f,  1.0f, 1.0f, 1.0f},
+        {-1.0f,  1.0f, 1.0f, 1.0f}
+    };
+
+    float viewMinX = FLT_MAX, viewMinY = FLT_MAX, viewMinZ = FLT_MAX;
+    float viewMaxX = -FLT_MAX, viewMaxY = -FLT_MAX, viewMaxZ = -FLT_MAX;
+    for (glm::vec4& corner : viewCorners)
+    {
+        // 1. NDC -> WorldSpace w/ perspective divide
+        corner = glm::inverse(viewproj) * corner;
+        corner /= corner.w;
+
+        // 2. WorldSpace -> LightSpace
+        corner = shadowView * corner;
+
+        viewMinX = std::min(viewMinX, corner.x);
+        viewMinY = std::min(viewMinY, corner.y);
+        viewMinZ = std::min(viewMinZ, corner.z);
+
+        viewMaxX = std::max(viewMaxX, corner.x);
+        viewMaxY = std::max(viewMaxY, corner.y);
+        viewMaxZ = std::max(viewMaxZ, corner.z);
+    }
+
+    // transform scene AABB into light space
+    std::array<glm::vec3, 8> sceneCorners = sceneAABB.getCorners();
+
+    float sceneMinX = FLT_MAX, sceneMinY = FLT_MAX, sceneMinZ = FLT_MAX;
+    float sceneMaxX = -FLT_MAX, sceneMaxY = -FLT_MAX, sceneMaxZ = -FLT_MAX;
+    for (const glm::vec3& corner : sceneCorners)
+    {
+        glm::vec4 lightSpacePos = shadowView * glm::vec4{ corner, 1.f };
+
+        sceneMinX = std::min(sceneMinX, lightSpacePos.x);
+        sceneMinY = std::min(sceneMinY, lightSpacePos.y);
+        sceneMinZ = std::min(sceneMinZ, lightSpacePos.z);
+
+        sceneMaxX = std::max(sceneMaxX, lightSpacePos.x);
+        sceneMaxY = std::max(sceneMaxY, lightSpacePos.y);
+        sceneMaxZ = std::max(sceneMaxZ, lightSpacePos.z);
+    }
+
+    float left      = std::max(viewMinX, sceneMinX),    right = std::min(viewMaxX, sceneMaxX);
+    float bottom    = std::max(viewMinY, sceneMinY),    top = std::min(viewMaxY, sceneMaxY);
+    float zNear     = -sceneMaxZ,                       zFar = -std::max(viewMinZ, sceneMinZ);
+
+    // texel snapping
+
+    // 1. Get World Space size of each texel
+    const float shadowWidth = (right - left);
+    const float shadowHeight = (top - bottom);
+
+    const float texelSizeX = shadowWidth / float(kShadowMapResolution.width);
+    const float texelSizeY = shadowHeight / float(kShadowMapResolution.height);
+
+    // 2. Snap center
+    float centerX = (left + right) * 0.5f;
+    float centerY = (bottom + top) * 0.5f;
+
+    centerX = floorf(centerX / texelSizeX) * texelSizeX;
+    centerY = floorf(centerY / texelSizeY) * texelSizeY;
+
+    glm::mat4 shadowProj = glm::orthoZO(
+        centerX - (shadowWidth * 0.5f), centerX + (shadowWidth * 0.5f),
+        centerY - (shadowHeight * 0.5f), centerY + (shadowHeight * 0.5f),
+        zNear, zFar
+    );
+
+    return shadowProj * shadowView;
+}
+
 void RenderEngine::setSunDirection(float azimuth, float altitude)
 {
     float radAzimuth = glm::radians(azimuth);
@@ -427,30 +513,7 @@ void RenderEngine::setSunDirection(float azimuth, float altitude)
         cosAltitude * glm::cos(radAzimuth) 
     };
 
-    // light view matrix looking from the light direction towards the origin
-    glm::mat4 shadowView = glm::lookAt(globalSceneData.lightDirection, glm::vec3{ 0.f, 0.f, 0.f }, glm::vec3{0.f, 1.f, 0.f});
-
-    // transform scene AABB into light space
-    std::array<glm::vec3, 8> sceneCorners = sceneAABB.getCorners();
-
-    float minX = FLT_MAX, minY = FLT_MAX, minZ = FLT_MAX;
-    float maxX = -FLT_MAX, maxY = -FLT_MAX, maxZ = -FLT_MAX;
-
-    for (const glm::vec3& corner : sceneCorners)
-    {
-        glm::vec4 lightSpacePos = shadowView * glm::vec4{ corner, 1.f };
-
-        minX = std::min(minX, lightSpacePos.x);
-        minY = std::min(minY, lightSpacePos.y);
-        minZ = std::min(minZ, lightSpacePos.z);
-
-        maxX = std::max(maxX, lightSpacePos.x);
-        maxY = std::max(maxY, lightSpacePos.y);
-        maxZ = std::max(maxZ, lightSpacePos.z);
-    }
-
-    glm::mat4 shadowProj = glm::orthoZO(minX, maxX, minY, maxY, -maxZ, -minZ);
-    globalSceneData.shadowMatrix = shadowProj * shadowView;
+    globalSceneData.shadowMatrix = computeShadowMatrix(globalSceneData.lightDirection, globalSceneData.viewproj, sceneAABB);
 }
 
 void RenderEngine::setSunLuminance(float luminance)
@@ -465,6 +528,8 @@ void RenderEngine::setViewMatrix(const glm::mat4 view)
 
     globalSceneData.view = view;
     globalSceneData.viewproj = projection * view;
+
+    globalSceneData.shadowMatrix = computeShadowMatrix(globalSceneData.lightDirection, globalSceneData.viewproj, sceneAABB);
 }
 
 void RenderEngine::setViewPosition(const glm::vec3 viewPosition)
@@ -1417,7 +1482,7 @@ void RenderEngine::initScene()
     };
 
     // load scene
-    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/Bistro.glb"); 
+    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/sponza-png.glb"); 
     loadedGltf = std::make_unique<LoadedGltf>(this, gltfPath.string().c_str());
 
     // upload draws
@@ -1449,7 +1514,7 @@ void RenderEngine::initScene()
     loadedGltf->loadHDRSkybox(hdriPath.string().c_str());
 
     setSunDirection(0.f, 90.f);
-    setSunLuminance(5.f);
+    setSunLuminance(20.f);
 }
 
 struct Frustum
@@ -1458,7 +1523,7 @@ struct Frustum
 };
 
 //https://www.gamedevs.org/uploads/fast-extraction-viewing-frustum-planes-from-world-view-projection-matrix.pdf
-static Frustum extractViewFrustum(const glm::mat4& viewproj)
+static Frustum extractFrustum(const glm::mat4& viewproj)
 {
     Frustum result{};
 
@@ -1516,7 +1581,7 @@ void RenderEngine::drawScene(VkCommandBuffer cmd)
         scene.brdfLUT.descriptorSet 
     };
 
-    Frustum viewFrustum = extractViewFrustum(globalSceneData.viewproj);
+    Frustum viewFrustum = extractFrustum(globalSceneData.viewproj);
 
     // OPAQUE PASS
     // bind pipeline
@@ -1703,7 +1768,7 @@ void RenderEngine::renderShadowMap(VkCommandBuffer cmd)
     };
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    // Frustum viewFrustum = extractViewFrustum(globalSceneData.shadowMatrix);
+    Frustum shadowFrustum = extractFrustum(globalSceneData.shadowMatrix);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline.pipeline);
 
@@ -1712,10 +1777,10 @@ void RenderEngine::renderShadowMap(VkCommandBuffer cmd)
     for (const DrawCommand& draw : renderQueueOpaque)
     {
         // cull non visible draws
-        //if (!isVisible(draw, viewFrustum))
-        //{
-        //    continue;
-        //}
+        if (!isVisible(draw, shadowFrustum))
+        {
+            continue;
+        }
 
         // bind geometry buffers
         gfx::AllocatedBuffer vertexBuffer = loadedGltf->buffers[draw.vertexBuffer];
