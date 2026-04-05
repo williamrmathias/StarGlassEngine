@@ -59,10 +59,10 @@ Texture2D brdfLut;
 SamplerState brdfLutSampler;
 
 [[vk::binding(0, 5)]]
-Texture2D shadowMap;
+Texture2DArray cascadedShadowMap;
 
 [[vk::binding(0, 5)]]
-SamplerState shadowMapSampler;
+SamplerState cascadedShadowMapSampler;
 
 struct MaterialConstants
 {
@@ -309,8 +309,8 @@ float computeShadowFactor(float3 positionShadow, float3 normal, float3 lightDir,
     const float currDepth = positionShadow.z;
     const float2 ndc = positionShadow.xy * float2(0.5f, 0.5f) + float2(0.5f, 0.5f);
     
-    uint width, height;
-    shadowMap.GetDimensions(width, height);
+    uint width, height, numCascades;
+    cascadedShadowMap.GetDimensions(width, height, numCascades);
     
     // if the current depth is behind the closest, we are in shadow
     // add a angle adjusted bias
@@ -333,7 +333,7 @@ float computeShadowFactor(float3 positionShadow, float3 normal, float3 lightDir,
         // rotate poisson offset and sample
         float2 offset = mul(poissonDisk[i], rotationMatrix);
         
-        float pcfDepth = shadowMap.Sample(shadowMapSampler, ndc + offset * texelSize * 2.f).r;
+        float pcfDepth = cascadedShadowMap.Sample(cascadedShadowMapSampler, float3(ndc + offset * texelSize * 2.f, 0.f)).r;
         shadow += (currDepth - depthBias) > pcfDepth ? 1.f : 0.f;
     }
 

@@ -47,6 +47,7 @@ constexpr size_t NUM_FRAMES = 2;
 constexpr uint32_t NUM_MATERIALS_MAX = 1000;
 
 constexpr VkExtent2D kShadowMapResolution = VkExtent2D{ 4096, 4096 };
+constexpr uint32_t kShadowMapCascades = 3;
 
 struct GlobalSceneData
 {
@@ -131,6 +132,15 @@ struct RenderTarget
     void cleanup(Device* device);
 };
 
+struct CascadedShadowMap
+{
+    gfx::AllocatedImage imageArray;
+    VkImageView cascadeTargetViews[kShadowMapCascades];
+    VkImageView shaderView;
+
+    void cleanup(Device* device);
+};
+
 class RenderEngine
 {
 public:
@@ -149,7 +159,7 @@ public:
     // intermediate render targets
     RenderTarget hdrColorTarget;
     RenderTarget depthTarget;
-    RenderTarget shadowTarget;
+    CascadedShadowMap csm;
 
     AllocatedImage skybox;
 
@@ -173,7 +183,7 @@ public:
 
         AllocatedBuffer uniformBuffer;
         VkDescriptorSet globalDescriptorSet;
-        VkDescriptorSet shadowMapDescriptorSet;
+        VkDescriptorSet csmDescriptorSet;
         VkDescriptorSet screenSpaceDescriptorSet;
 
         void cleanup(Device* device);
@@ -247,7 +257,7 @@ private:
 
     RenderTarget createHDRColorTarget() const;
     RenderTarget createDepthTarget() const;
-    RenderTarget createShadowTarget() const;
+    CascadedShadowMap createCascadedShadowMap() const;
 
     void initRenderTargets();
     void initDescriptorPool();
