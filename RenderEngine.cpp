@@ -423,90 +423,98 @@ void RenderEngine::endAndSubmitImmediateCommands()
     VK_Check(vkWaitForFences(device->device, 1, &immediateFence, true, 9'999'999'999));
 }
 
-static glm::mat4 computeShadowMatrix(const glm::vec3& lightDir, const glm::mat4& viewproj, const Extent& sceneAABB)
+static void computeShadowMatrices(const glm::vec3& lightDir, const glm::mat4& viewproj, const Extent& sceneAABB, glm::mat4* const shadowMatrices)
 {
     // light view matrix looking from the light direction towards the origin
     glm::vec3 up = lightDir.y == 1.f || lightDir.y == -1.f ? glm::vec3{ 0.f, 0.f, 1.f } : glm::vec3{ 0.f, 1.f, 0.f };
     glm::mat4 shadowView = glm::lookAt(lightDir, glm::vec3{ 0.f, 0.f, 0.f }, up);
 
-    // transform view frustum into light space
-    // NDC = [-1,1]x[-1,1]x[0,1]
-    glm::vec4 ndcCorners[8] = {
-        {-1.0f, -1.0f, 0.0f, 1.0f},
-        { 1.0f, -1.0f, 0.0f, 1.0f},
-        { 1.0f,  1.0f, 0.0f, 1.0f},
-        {-1.0f,  1.0f, 0.0f, 1.0f},
-        {-1.0f, -1.0f, 1.0f, 1.0f},
-        { 1.0f, -1.0f, 1.0f, 1.0f},
-        { 1.0f,  1.0f, 1.0f, 1.0f},
-        {-1.0f,  1.0f, 1.0f, 1.0f}
-    };
-
-    float viewMinX = FLT_MAX, viewMinY = FLT_MAX, viewMinZ = FLT_MAX;
-    float viewMaxX = -FLT_MAX, viewMaxY = -FLT_MAX, viewMaxZ = -FLT_MAX;
-    for (const glm::vec4& corner : ndcCorners)
+    const float zSplits[] = { 0.f, 0.99f, 0.998f, 1.f };
+    for (uint32_t cascadeIdx = 0; cascadeIdx < kShadowMapCascades; ++cascadeIdx)
     {
-        // 1. NDC -> WorldSpace w/ perspective divide
-        glm::vec4 lightSpacePos = glm::inverse(viewproj) * corner;
-        lightSpacePos /= lightSpacePos.w;
+        // transform view frustum into light space
+        // NDC = [-1,1]x[-1,1]x[0,1]
+        // Each cascade will have (1/kShadowMapCascades) portion of the depth
 
-        // 2. WorldSpace -> LightSpace
-        lightSpacePos = shadowView * lightSpacePos;
+        const float zNearNDC = zSplits[0];
+        const float zFarNDC = zSplits[cascadeIdx + 1];
+        glm::vec4 ndcCorners[8] = {
+            {-1.0f, -1.0f, zNearNDC, 1.0f},
+            { 1.0f, -1.0f, zNearNDC, 1.0f},
+            { 1.0f,  1.0f, zNearNDC, 1.0f},
+            {-1.0f,  1.0f, zNearNDC, 1.0f},
+            {-1.0f, -1.0f, zFarNDC, 1.0f},
+            { 1.0f, -1.0f, zFarNDC, 1.0f},
+            { 1.0f,  1.0f, zFarNDC, 1.0f},
+            {-1.0f,  1.0f, zFarNDC, 1.0f}
+        };
 
-        viewMinX = std::min(viewMinX, lightSpacePos.x);
-        viewMinY = std::min(viewMinY, lightSpacePos.y);
-        viewMinZ = std::min(viewMinZ, lightSpacePos.z);
+        float viewMinX = FLT_MAX, viewMinY = FLT_MAX, viewMinZ = FLT_MAX;
+        float viewMaxX = -FLT_MAX, viewMaxY = -FLT_MAX, viewMaxZ = -FLT_MAX;
+        for (const glm::vec4& corner : ndcCorners)
+        {
+            // 1. NDC -> WorldSpace w/ perspective divide
+            glm::vec4 lightSpacePos = glm::inverse(viewproj) * corner;
+            lightSpacePos /= lightSpacePos.w;
 
-        viewMaxX = std::max(viewMaxX, lightSpacePos.x);
-        viewMaxY = std::max(viewMaxY, lightSpacePos.y);
-        viewMaxZ = std::max(viewMaxZ, lightSpacePos.z);
+            // 2. WorldSpace -> LightSpace
+            lightSpacePos = shadowView * lightSpacePos;
+
+            viewMinX = std::min(viewMinX, lightSpacePos.x);
+            viewMinY = std::min(viewMinY, lightSpacePos.y);
+            viewMinZ = std::min(viewMinZ, lightSpacePos.z);
+
+            viewMaxX = std::max(viewMaxX, lightSpacePos.x);
+            viewMaxY = std::max(viewMaxY, lightSpacePos.y);
+            viewMaxZ = std::max(viewMaxZ, lightSpacePos.z);
+        }
+
+        // transform scene AABB into light space
+        std::array<glm::vec3, 8> sceneCorners = sceneAABB.getCorners();
+
+        float sceneMinX = FLT_MAX, sceneMinY = FLT_MAX, sceneMinZ = FLT_MAX;
+        float sceneMaxX = -FLT_MAX, sceneMaxY = -FLT_MAX, sceneMaxZ = -FLT_MAX;
+        for (const glm::vec3& corner : sceneCorners)
+        {
+            glm::vec4 lightSpacePos = shadowView * glm::vec4{ corner, 1.f };
+
+            sceneMinX = std::min(sceneMinX, lightSpacePos.x);
+            sceneMinY = std::min(sceneMinY, lightSpacePos.y);
+            sceneMinZ = std::min(sceneMinZ, lightSpacePos.z);
+
+            sceneMaxX = std::max(sceneMaxX, lightSpacePos.x);
+            sceneMaxY = std::max(sceneMaxY, lightSpacePos.y);
+            sceneMaxZ = std::max(sceneMaxZ, lightSpacePos.z);
+        }
+
+        float left = std::max(viewMinX, sceneMinX), right = std::min(viewMaxX, sceneMaxX);
+        float bottom = std::max(viewMinY, sceneMinY), top = std::min(viewMaxY, sceneMaxY);
+        float zNear = -sceneMaxZ, zFar = -std::max(viewMinZ, sceneMinZ);
+
+        // texel snapping
+
+        // 1. Get World Space size of each texel
+        const float shadowWidth = (right - left);
+        const float shadowHeight = (top - bottom);
+
+        const float texelSizeX = shadowWidth / float(kShadowMapResolution.width);
+        const float texelSizeY = shadowHeight / float(kShadowMapResolution.height);
+
+        // 2. Snap center
+        float centerX = (left + right) * 0.5f;
+        float centerY = (bottom + top) * 0.5f;
+
+        centerX = floorf(centerX / texelSizeX) * texelSizeX;
+        centerY = floorf(centerY / texelSizeY) * texelSizeY;
+
+        glm::mat4 shadowProj = glm::orthoZO(
+            centerX - (shadowWidth * 0.5f), centerX + (shadowWidth * 0.5f),
+            centerY - (shadowHeight * 0.5f), centerY + (shadowHeight * 0.5f),
+            zNear, zFar
+        );
+
+        shadowMatrices[cascadeIdx] = shadowProj * shadowView;
     }
-
-    // transform scene AABB into light space
-    std::array<glm::vec3, 8> sceneCorners = sceneAABB.getCorners();
-
-    float sceneMinX = FLT_MAX, sceneMinY = FLT_MAX, sceneMinZ = FLT_MAX;
-    float sceneMaxX = -FLT_MAX, sceneMaxY = -FLT_MAX, sceneMaxZ = -FLT_MAX;
-    for (const glm::vec3& corner : sceneCorners)
-    {
-        glm::vec4 lightSpacePos = shadowView * glm::vec4{ corner, 1.f };
-
-        sceneMinX = std::min(sceneMinX, lightSpacePos.x);
-        sceneMinY = std::min(sceneMinY, lightSpacePos.y);
-        sceneMinZ = std::min(sceneMinZ, lightSpacePos.z);
-
-        sceneMaxX = std::max(sceneMaxX, lightSpacePos.x);
-        sceneMaxY = std::max(sceneMaxY, lightSpacePos.y);
-        sceneMaxZ = std::max(sceneMaxZ, lightSpacePos.z);
-    }
-
-    float left      = std::max(viewMinX, sceneMinX),    right = std::min(viewMaxX, sceneMaxX);
-    float bottom    = std::max(viewMinY, sceneMinY),    top = std::min(viewMaxY, sceneMaxY);
-    float zNear     = -sceneMaxZ,                       zFar = -std::max(viewMinZ, sceneMinZ);
-
-    // texel snapping
-
-    // 1. Get World Space size of each texel
-    const float shadowWidth = (right - left);
-    const float shadowHeight = (top - bottom);
-
-    const float texelSizeX = shadowWidth / float(kShadowMapResolution.width);
-    const float texelSizeY = shadowHeight / float(kShadowMapResolution.height);
-
-    // 2. Snap center
-    float centerX = (left + right) * 0.5f;
-    float centerY = (bottom + top) * 0.5f;
-
-    centerX = floorf(centerX / texelSizeX) * texelSizeX;
-    centerY = floorf(centerY / texelSizeY) * texelSizeY;
-
-    glm::mat4 shadowProj = glm::orthoZO(
-        centerX - (shadowWidth * 0.5f), centerX + (shadowWidth * 0.5f),
-        centerY - (shadowHeight * 0.5f), centerY + (shadowHeight * 0.5f),
-        zNear, zFar
-    );
-
-    return shadowProj * shadowView;
 }
 
 void RenderEngine::setSunDirection(float azimuth, float altitude)
@@ -522,7 +530,7 @@ void RenderEngine::setSunDirection(float azimuth, float altitude)
         cosAltitude * glm::cos(radAzimuth) 
     };
 
-    globalSceneData.shadowMatrix = computeShadowMatrix(globalSceneData.lightDirection, globalSceneData.viewproj, sceneAABB);
+    computeShadowMatrices(globalSceneData.lightDirection, globalSceneData.viewproj, sceneAABB, globalSceneData.shadowMatrices);
 }
 
 void RenderEngine::setSunLuminance(float luminance)
@@ -538,7 +546,7 @@ void RenderEngine::setViewMatrix(const glm::mat4 view)
     globalSceneData.view = view;
     globalSceneData.viewproj = projection * view;
 
-    globalSceneData.shadowMatrix = computeShadowMatrix(globalSceneData.lightDirection, globalSceneData.viewproj, sceneAABB);
+    computeShadowMatrices(globalSceneData.lightDirection, globalSceneData.viewproj, sceneAABB, globalSceneData.shadowMatrices);
 }
 
 void RenderEngine::setViewPosition(const glm::vec3 viewPosition)
@@ -1782,7 +1790,7 @@ void RenderEngine::renderShadowMap(VkCommandBuffer cmd)
         };
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        Frustum shadowFrustum = extractFrustum(globalSceneData.shadowMatrix);
+        Frustum shadowFrustum = extractFrustum(globalSceneData.shadowMatrices[cascadeIdx]);
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline.pipeline);
 
@@ -1821,6 +1829,7 @@ void RenderEngine::renderShadowMap(VkCommandBuffer cmd)
             // bind push constants
             ShadowPushConstant pushConstants{
                 .model = draw.transform,
+                .cascadeIdx = cascadeIdx,
                 .alphaCutoff = currentMaterialConstants.alphaCutoff
             };
 

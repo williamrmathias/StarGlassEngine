@@ -54,7 +54,7 @@ struct GlobalSceneData
     glm::mat4 view;
     glm::mat4 viewproj;
 
-    glm::mat4 shadowMatrix;
+    glm::mat4 shadowMatrices[kShadowMapCascades];
 
     glm::vec3 viewPosition;
     float padding1;
@@ -99,9 +99,10 @@ struct IBLPushConstants
 struct ShadowPushConstant
 {
     glm::mat4 model;
+    uint32_t cascadeIdx;
     float alphaCutoff;
 
-    float padding[15];
+    float padding[14];
 };
 
 static_assert(sizeof(PushConstants) <= 128);

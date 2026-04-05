@@ -7,7 +7,7 @@ struct GlobalSceneData
     float4x4 view;
     float4x4 viewproj;
     
-    float4x4 shadowMatrix;
+    float4x4 shadowMatrices[3];
     
     float3 viewPosition;
     float padding1;
@@ -110,7 +110,7 @@ VertexOutput simpleVS(VertexInput input)
     float4x4 mvp = mul(globalSceneData.viewproj, pushConstants.model);
     output.position = mul(mvp, float4(input.position, 1.f));
     output.positionWorld = mul(pushConstants.model, float4(input.position, 1.f)).xyz;
-    output.positionShadow = mul(globalSceneData.shadowMatrix, float4(output.positionWorld, 1.f)).xyz;
+    output.positionShadow = mul(globalSceneData.shadowMatrices[0], float4(output.positionWorld, 1.f)).xyz;
     
     float3 N = mul(pushConstants.model, float4(input.normal, 0.f)).xyz;
 
