@@ -471,10 +471,30 @@ static glm::mat4 computeShadowMatrix(const glm::vec3& lightDir, const glm::mat4&
         sceneMaxZ = std::max(sceneMaxZ, lightSpacePos.z);
     }
 
+    float left      = std::max(viewMinX, sceneMinX),    right = std::min(viewMaxX, sceneMaxX);
+    float bottom    = std::max(viewMinY, sceneMinY),    top = std::min(viewMaxY, sceneMaxY);
+    float zNear     = -sceneMaxZ,                       zFar = -std::max(viewMinZ, sceneMinZ);
+
+    // texel snapping
+
+    // 1. Get World Space size of each texel
+    const float shadowWidth = (right - left);
+    const float shadowHeight = (top - bottom);
+
+    const float texelSizeX = shadowWidth / float(kShadowMapResolution.width);
+    const float texelSizeY = shadowHeight / float(kShadowMapResolution.height);
+
+    // 2. Snap center
+    float centerX = (left + right) * 0.5f;
+    float centerY = (bottom + top) * 0.5f;
+
+    centerX = floorf(centerX / texelSizeX) * texelSizeX;
+    centerY = floorf(centerY / texelSizeY) * texelSizeY;
+
     glm::mat4 shadowProj = glm::orthoZO(
-        std::max(viewMinX, sceneMinX), std::min(viewMaxX, sceneMaxX),
-        std::max(viewMinY, sceneMinY), std::min(viewMaxY, sceneMaxY),
-        -sceneMaxZ, -std::max(viewMinZ, sceneMinZ)
+        centerX - (shadowWidth * 0.5f), centerX + (shadowWidth * 0.5f),
+        centerY - (shadowHeight * 0.5f), centerY + (shadowHeight * 0.5f),
+        zNear, zFar
     );
 
     return shadowProj * shadowView;
@@ -1462,7 +1482,7 @@ void RenderEngine::initScene()
     };
 
     // load scene
-    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/Bistro.glb"); 
+    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/sponza-png.glb"); 
     loadedGltf = std::make_unique<LoadedGltf>(this, gltfPath.string().c_str());
 
     // upload draws

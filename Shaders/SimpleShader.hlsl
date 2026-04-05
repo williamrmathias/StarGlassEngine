@@ -314,7 +314,7 @@ float computeShadowFactor(float3 positionShadow, float3 normal, float3 lightDir,
     
     // if the current depth is behind the closest, we are in shadow
     // add a angle adjusted bias
-    const float depthBias = lerp(0.05f, 0.f, dot(normal, lightDir));
+    const float depthBias = lerp(0.005f, 0.0005f, dot(normal, lightDir));
     
     float shadow = 0.f;
     float2 texelSize = float2(1.f, 1.f) / float2(width, height);
@@ -333,7 +333,7 @@ float computeShadowFactor(float3 positionShadow, float3 normal, float3 lightDir,
         // rotate poisson offset and sample
         float2 offset = mul(poissonDisk[i], rotationMatrix);
         
-        float pcfDepth = shadowMap.Sample(shadowMapSampler, ndc + offset * texelSize * 3.f).r;
+        float pcfDepth = shadowMap.Sample(shadowMapSampler, ndc + offset * texelSize * 2.f).r;
         shadow += (currDepth - depthBias) > pcfDepth ? 1.f : 0.f;
     }
 
