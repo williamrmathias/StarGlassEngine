@@ -93,9 +93,8 @@ struct VertexOutput
 {
     float4 position : SV_Position;
     float3 positionWorld : TEXCOORD0;
-    float3 positionShadow : TEXCOORD1;
-    float3 normal : TEXCOORD2;
-    float2 uv : TEXCOORD3;
+    float3 normal : TEXCOORD1;
+    float2 uv : TEXCOORD2;
     float4 color : COLOR0;
 };
 
@@ -110,7 +109,6 @@ VertexOutput simpleVS(VertexInput input)
     float4x4 mvp = mul(globalSceneData.viewproj, pushConstants.model);
     output.position = mul(mvp, float4(input.position, 1.f));
     output.positionWorld = mul(pushConstants.model, float4(input.position, 1.f)).xyz;
-    output.positionShadow = mul(globalSceneData.shadowMatrices[0], float4(output.positionWorld, 1.f)).xyz;
     
     float3 N = mul(pushConstants.model, float4(input.normal, 0.f)).xyz;
 
@@ -304,10 +302,19 @@ static const float2 poissonDisk[16] =
     float2(0.19984126, 0.78641367), float2(0.14383161, -0.14100790)
 };
 
-float computeShadowFactor(float3 positionShadow, float3 normal, float3 lightDir, float2 screenUV)
+float computeShadowFactor(float linearViewDepth, float3 posWorld, float3 normal, float3 lightDir, float2 screenUV)
 {
-    const float currDepth = positionShadow.z;
-    const float2 ndc = positionShadow.xy * float2(0.5f, 0.5f) + float2(0.5f, 0.5f);
+    const float viewSplits[] = { 10.f, 100.f, 1000.f, 3.402823466e+38F }; // FLT_MAX
+    const float viewDepth = clamp(linearViewDepth, 0.f, 1000.f);
+    
+    uint cascadeIdx = 0;
+    while (viewDepth > viewSplits[cascadeIdx])
+        ++cascadeIdx;
+    
+    const float4 posShadow = mul(globalSceneData.shadowMatrices[cascadeIdx], float4(posWorld, 1.f));
+    
+    const float currDepth = posShadow.z;
+    const float2 ndc = posShadow.xy * float2(0.5f, 0.5f) + float2(0.5f, 0.5f);
     
     uint width, height, numCascades;
     cascadedShadowMap.GetDimensions(width, height, numCascades);
@@ -333,7 +340,7 @@ float computeShadowFactor(float3 positionShadow, float3 normal, float3 lightDir,
         // rotate poisson offset and sample
         float2 offset = mul(poissonDisk[i], rotationMatrix);
         
-        float pcfDepth = cascadedShadowMap.Sample(cascadedShadowMapSampler, float3(ndc + offset * texelSize * 2.f, 0.f)).r;
+        float pcfDepth = cascadedShadowMap.Sample(cascadedShadowMapSampler, float3(ndc + offset * texelSize * 2.f, float(cascadeIdx))).r;
         shadow += (currDepth - depthBias) > pcfDepth ? 1.f : 0.f;
     }
 
@@ -367,7 +374,8 @@ PixelOutput simplePS(VertexOutput input)
     
     float3 ambient = brdf_IBL(baseColor.rgb, roughness, metalness, viewDirection, lightDirection, normal);
     
-    const float shadowFactor = computeShadowFactor(input.positionShadow, input.normal, lightDirection, input.position.xy);
+    const float linearViewDepth = -mul(globalSceneData.view, float4(input.positionWorld, 1.f)).z;
+    const float shadowFactor = computeShadowFactor(linearViewDepth, input.positionWorld, input.normal, lightDirection, input.position.xy);
     radiance = radiance * (1.f - shadowFactor); // TODO conditional skip the direct brdf
     
     result.color = float4(radiance + ambient, alpha);
