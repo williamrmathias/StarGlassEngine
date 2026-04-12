@@ -80,13 +80,19 @@ void RenderEngine::render()
     VK_Check(vkBeginCommandBuffer(cmd, &beginInfo));
 
     transitionImageLayoutCoarse(
-        cmd, hdrColorTarget.image.image,
+        cmd, hdrColorTargetMSAA.image.image,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_IMAGE_ASPECT_COLOR_BIT
     );
 
     transitionImageLayoutCoarse(
-        cmd, depthTarget.image.image,
+        cmd, hdrColorTargetResolve.image.image,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT
+    );
+
+    transitionImageLayoutCoarse(
+        cmd, depthTargetMSAA.image.image,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
         VK_IMAGE_ASPECT_DEPTH_BIT
     );
@@ -130,11 +136,11 @@ void RenderEngine::render()
     VkRenderingAttachmentInfo colorAttachInfo{
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
         .pNext = nullptr,
-        .imageView = hdrColorTarget.view,
+        .imageView = hdrColorTargetMSAA.view,
         .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        .resolveMode = VK_RESOLVE_MODE_NONE,
-        .resolveImageView = VK_NULL_HANDLE,
-        .resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT,
+        .resolveImageView = hdrColorTargetResolve.view,
+        .resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
         .clearValue = VkClearValue{.color = VkClearColorValue{0.f, 0.f, 0.f, 1.f} }
@@ -143,7 +149,7 @@ void RenderEngine::render()
     VkRenderingAttachmentInfo depthAttachInfo{
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
         .pNext = nullptr,
-        .imageView = depthTarget.view,
+        .imageView = depthTargetMSAA.view,
         .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
         .resolveMode = VK_RESOLVE_MODE_NONE,
         .resolveImageView = VK_NULL_HANDLE,
@@ -157,7 +163,7 @@ void RenderEngine::render()
         .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
         .pNext = nullptr,
         .flags = 0,
-        .renderArea = VkRect2D{ VkOffset2D{0, 0}, device->swapchain.swapchainExtent},
+        .renderArea = VkRect2D{ VkOffset2D{0, 0}, hdrColorTargetMSAA.image.extents},
         .layerCount = 1,
         .viewMask = 0,
         .colorAttachmentCount = 1,
@@ -172,8 +178,8 @@ void RenderEngine::render()
     VkViewport viewport{
         .x = 0.f,
         .y = 0.f,
-        .width = static_cast<float>(device->swapchain.swapchainExtent.width),
-        .height = static_cast<float>(device->swapchain.swapchainExtent.height),
+        .width = static_cast<float>(hdrColorTargetMSAA.image.extents.width),
+        .height = static_cast<float>(hdrColorTargetMSAA.image.extents.height),
         .minDepth = 0.f,
         .maxDepth = 1.f
     };
@@ -181,7 +187,7 @@ void RenderEngine::render()
 
     VkRect2D scissor{
         .offset = VkOffset2D{ 0, 0 },
-        .extent = device->swapchain.swapchainExtent
+        .extent = hdrColorTargetMSAA.image.extents
     };
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
@@ -190,14 +196,14 @@ void RenderEngine::render()
     // end rendering
     vkCmdEndRendering(cmd);
 
-    renderSky(cmd, hdrColorTarget.view, depthTarget.view, hdrColorTarget.image.extents);
+    renderSky(cmd, hdrColorTargetResolve.view, depthTargetMSAA.view, hdrColorTargetResolve.image.extents);
 
     VkImage swapchainImage = device->swapchain.swapchainImages[swapchainIdx];
     VkImageView swapchainImageView = device->swapchain.swapchainImageViews[swapchainIdx];
 
     VkExtent3D colorImageExtent{
-        hdrColorTarget.image.extents.width,
-        hdrColorTarget.image.extents.height,
+        hdrColorTargetResolve.image.extents.width,
+        hdrColorTargetResolve.image.extents.height,
         1
     };
     VkExtent3D swapchainExtent{
@@ -208,7 +214,7 @@ void RenderEngine::render()
 
     // transition hdr color buffer to readable layout for postFX pass
     transitionImageLayoutCoarse(
-        cmd, hdrColorTarget.image.image,
+        cmd, hdrColorTargetResolve.image.image,
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_IMAGE_ASPECT_COLOR_BIT
     );
@@ -366,8 +372,8 @@ void RenderEngine::cleanup()
         skyPipeline.cleanup(device.get());
     }
 
-    hdrColorTarget.cleanup(device.get());
-    depthTarget.cleanup(device.get());
+    hdrColorTargetMSAA.cleanup(device.get());
+    depthTargetMSAA.cleanup(device.get());
     csm.cleanup(device.get());
 
     vkDestroySampler(device->device, screenSpaceSampler, nullptr);
@@ -612,7 +618,33 @@ void RenderEngine::setActiveScreenSpacePipeline(PipelineType pipeline)
     }
 }
 
-RenderTarget RenderEngine::createHDRColorTarget() const
+RenderTarget RenderEngine::createHDRColorTargetMSAA() const
+{
+    RenderTarget target;
+
+    VkFormat colorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+
+    // get color format
+    VkFormatProperties formatProps;
+    vkGetPhysicalDeviceFormatProperties(device->physicalDevice, colorFormat, &formatProps);
+    bool supportsFormat = formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
+    if (!supportsFormat)
+    {
+        SDL_LogError(0, "Color image error: format not supported by device\n");
+        std::abort();
+    }
+
+    target.image = gfx::createAllocatedMultiSampleImage(
+        device.get(),
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        colorFormat, device->swapchain.swapchainExtent, VK_SAMPLE_COUNT_8_BIT
+    );
+
+    target.view = createImageView(device.get(), target.image.image, target.image.format, VK_IMAGE_ASPECT_COLOR_BIT);
+    return target;
+}
+
+RenderTarget RenderEngine::createHDRColorTargetResolve() const
 {
     RenderTarget target;
 
@@ -631,14 +663,14 @@ RenderTarget RenderEngine::createHDRColorTarget() const
     target.image = gfx::createAllocatedImage(
         device.get(),
         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-        colorFormat, device->swapchain.swapchainExtent, /*useMips*/false
+        colorFormat, device->swapchain.swapchainExtent, /*useMips=*/false
     );
 
     target.view = createImageView(device.get(), target.image.image, target.image.format, VK_IMAGE_ASPECT_COLOR_BIT);
     return target;
 }
 
-RenderTarget RenderEngine::createDepthTarget() const
+RenderTarget RenderEngine::createDepthTargetMSAA() const
 {
     RenderTarget target;
 
@@ -654,10 +686,10 @@ RenderTarget RenderEngine::createDepthTarget() const
         std::abort();
     }
 
-    target.image = gfx::createAllocatedImage(
+    target.image = gfx::createAllocatedMultiSampleImage(
         device.get(), 
         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 
-        depthFormat, device->swapchain.swapchainExtent, /*useMips*/false
+        depthFormat, device->swapchain.swapchainExtent, VK_SAMPLE_COUNT_8_BIT
     );
 
     target.view = createImageView(device.get(), target.image.image, target.image.format, VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -697,8 +729,9 @@ CascadedShadowMap RenderEngine::createCascadedShadowMap() const
 
 void RenderEngine::initRenderTargets()
 {
-    hdrColorTarget = createHDRColorTarget();
-    depthTarget = createDepthTarget();
+    hdrColorTargetMSAA = createHDRColorTargetMSAA();
+    hdrColorTargetResolve = createHDRColorTargetResolve();
+    depthTargetMSAA = createDepthTargetMSAA();
     csm = createCascadedShadowMap();
 }
 
@@ -1000,7 +1033,7 @@ void RenderEngine::initFrameData()
     {
         VkDescriptorImageInfo imageInfo{
             .sampler = screenSpaceSampler,
-            .imageView = hdrColorTarget.view,
+            .imageView = hdrColorTargetResolve.view,
             .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         };
 
@@ -1072,8 +1105,8 @@ void RenderEngine::initGraphicsPipelines()
     {
         // opaque pass pipeline
         // render attachments
-        pipelineBuilder.setColorAttachmentFormats(std::span{ &hdrColorTarget.image.format, 1});
-        pipelineBuilder.setDepthAttachmentFormat(depthTarget.image.format);
+        pipelineBuilder.setColorAttachmentFormats(std::span{ &hdrColorTargetMSAA.image.format, 1});
+        pipelineBuilder.setDepthAttachmentFormat(depthTargetMSAA.image.format);
 
         // shader info
         pipelineBuilder.setShaderStages(vertShader, "simpleVS", fragShader, "simplePS");
@@ -1097,7 +1130,7 @@ void RenderEngine::initGraphicsPipelines()
 
         // rasterization info
         pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
-        pipelineBuilder.setSampleCount(VK_SAMPLE_COUNT_1_BIT);
+        pipelineBuilder.setSampleCount(VK_SAMPLE_COUNT_8_BIT);
         pipelineBuilder.setDepthMode(VK_TRUE, VK_TRUE);
 
         BlendState blendState = BlendState::Disabled;
@@ -1291,7 +1324,7 @@ void RenderEngine::initSkyboxPipeline()
     VkShaderModule fragShader = loadShaderModule(fragShaderPath.string().c_str());
 
     // render attachments
-    pipelineBuilder.setColorAttachmentFormats(std::span{ &hdrColorTarget.image.format, 1 });
+    pipelineBuilder.setColorAttachmentFormats(std::span{ &hdrColorTargetMSAA.image.format, 1 });
 
     // shader info
     pipelineBuilder.setShaderStages(vertShader, "skyboxVS", fragShader, "skyboxPS");
@@ -1328,7 +1361,7 @@ void RenderEngine::initIrradianceConvolutionPipeline()
     VkShaderModule fragShader = loadShaderModule(fragShaderPath.string().c_str());
 
     // render attachments
-    pipelineBuilder.setColorAttachmentFormats(std::span{ &hdrColorTarget.image.format, 1 });
+    pipelineBuilder.setColorAttachmentFormats(std::span{ &hdrColorTargetMSAA.image.format, 1 });
 
     // shader info
     pipelineBuilder.setShaderStages(vertShader, "irradianceVS", fragShader, "irradiancePS");
@@ -1438,8 +1471,8 @@ void RenderEngine::initSkyPipeline()
     VkShaderModule fragShader = loadShaderModule(fragShaderPath.string().c_str());
 
     // render attachments
-    pipelineBuilder.setColorAttachmentFormats(std::span{ &hdrColorTarget.image.format, 1 });
-    pipelineBuilder.setDepthAttachmentFormat(depthTarget.image.format);
+    pipelineBuilder.setColorAttachmentFormats(std::span{ &hdrColorTargetMSAA.image.format, 1 });
+    pipelineBuilder.setDepthAttachmentFormat(depthTargetMSAA.image.format);
 
     // shader info
     pipelineBuilder.setShaderStages(vertShader, "skyVS", fragShader, "skyPS");
@@ -2287,6 +2320,23 @@ void RenderEngine::renderPostFX(
     };
 
     vkCmdBeginRendering(cmd, &renderInfo);
+
+    // set dynamic viewport and scissor state
+    VkViewport viewport{
+        .x = 0.f,
+        .y = 0.f,
+        .width = static_cast<float>(renderExtent.width),
+        .height = static_cast<float>(renderExtent.height),
+        .minDepth = 0.f,
+        .maxDepth = 1.f
+    };
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor{
+        .offset = VkOffset2D{ 0, 0 },
+        .extent = renderExtent
+    };
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     vkCmdDraw(cmd, 3, 1, 0, 0);
 

@@ -210,7 +210,8 @@ float3 brdf_direct(
     float metalness,
     float3 viewDir,
     float3 lightDir,
-    float3 normal
+    float3 normal,
+    float normalVariance
 )
 {
     float3 halfway = normalize(viewDir + lightDir);
@@ -227,8 +228,10 @@ float3 brdf_direct(
     
     // input roughness param is a perceptual roughness
     // alpha is a more physically accurate value
-    // clamp to 0.045 to reduce specular aliasing
-    float alpha = clamp(roughness * roughness, 0.045f, 1.f);
+    float alpha = saturate(roughness * roughness);
+    
+    // incorportate normal variance to ameliorate specular aliasing
+    alpha = sqrt(alpha * alpha + normalVariance);
     
     float D = D_GGX(NdotH, alpha);
     float V = V_SmithGGXCorrelated(NdotV, NdotL, alpha);
@@ -249,15 +252,18 @@ float3 brdf_IBL(
     float metalness,
     float3 viewDir,
     float3 lightDir,
-    float3 normal
+    float3 normal,
+    float normalVariance
 )
 {
     const float NdotV = saturate(dot(normal, viewDir));
     
     // input roughness param is a perceptual roughness
     // alpha is a more physically accurate value
-    // clamp to 0.045 to reduce specular aliasing
-    const float alpha = clamp(roughness * roughness, 0.045f, 1.f);
+    float alpha = saturate(roughness * roughness);
+    
+    // incorportate normal variance to ameliorate specular aliasing
+    alpha = sqrt(alpha * alpha + normalVariance);
     
     float3 reflection = reflect(-viewDir, normal);
     
@@ -403,11 +409,17 @@ PixelOutput simplePS(VertexOutput input)
     float3 viewDirection = normalize(globalSceneData.viewPosition - input.positionWorld);
     float3 lightDirection = normalize(globalSceneData.lightDirection);
     
+    // compute vertex normal variance to ameliorate specular aliasing
+    const float3 vertexNormal = normalize(input.normal);
+    const float3 dndx = ddx(vertexNormal);
+    const float3 dndy = ddy(vertexNormal);
+    const float normalVariance = saturate(dot(dndx, dndx) + dot(dndy, dndy) - 0.005f);
+    
     float3 normal = perturbNormal(normalize(input.normal), input.positionWorld, input.uv);
     
-    float3 radiance = brdf_direct(baseColor.rgb, roughness, metalness, viewDirection, lightDirection, normal);
+    float3 radiance = brdf_direct(baseColor.rgb, roughness, metalness, viewDirection, lightDirection, normal, normalVariance);
     
-    float3 ambient = brdf_IBL(baseColor.rgb, roughness, metalness, viewDirection, lightDirection, normal);
+    float3 ambient = brdf_IBL(baseColor.rgb, roughness, metalness, viewDirection, lightDirection, normal, normalVariance);
     
     const float linearViewDepth = -mul(globalSceneData.view, float4(input.positionWorld, 1.f)).z;
     const float shadowFactor = computeShadowFactor(linearViewDepth, input.positionWorld, input.normal, lightDirection, input.position.xy);

@@ -44,6 +44,9 @@ struct AllocatedImage
 AllocatedImage createAllocatedImage(
     Device* device, VkImageUsageFlags usage, VkFormat format, VkExtent2D extents, bool useMips);
 
+AllocatedImage createAllocatedMultiSampleImage(
+    Device* device, VkImageUsageFlags usage, VkFormat format, VkExtent2D extents, VkSampleCountFlagBits sampleCount);
+
 AllocatedImage createAllocatedImageArray(
     Device* device, VkImageUsageFlags usage, VkFormat format, VkExtent2D extents, uint32_t arrayLayers);
 

@@ -158,8 +158,9 @@ public:
     VkFence immediateFence;
 
     // intermediate render targets
-    RenderTarget hdrColorTarget;
-    RenderTarget depthTarget;
+    RenderTarget hdrColorTargetMSAA;
+    RenderTarget depthTargetMSAA;
+    RenderTarget hdrColorTargetResolve;
     CascadedShadowMap csm;
 
     AllocatedImage skybox;
@@ -260,8 +261,9 @@ private:
     GlobalSceneData globalSceneData;
     float exposure = 1.f;
 
-    RenderTarget createHDRColorTarget() const;
-    RenderTarget createDepthTarget() const;
+    RenderTarget createHDRColorTargetMSAA() const;
+    RenderTarget createHDRColorTargetResolve() const;
+    RenderTarget createDepthTargetMSAA() const;
     CascadedShadowMap createCascadedShadowMap() const;
 
     void initRenderTargets();
