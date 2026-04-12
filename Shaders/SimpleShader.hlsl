@@ -302,19 +302,66 @@ static const float2 poissonDisk[16] =
     float2(0.19984126, 0.78641367), float2(0.14383161, -0.14100790)
 };
 
-float computeShadowFactor(float linearViewDepth, float3 posWorld, float3 normal, float3 lightDir, float2 screenUV)
+struct CascadeSample
 {
-    const float viewSplits[] = { 10.f, 100.f, 1000.f, 3.402823466e+38F }; // FLT_MAX
+    uint cascade0;
+    uint cascade1;
+    float blend;
+};
+
+CascadeSample getCascadeSample(float linearViewDepth)
+{
+    #define NUM_CASCADES 3
+    #define CASCADE_BLEND_BAND 0.2
+    
+    const float viewSplits[] = { 0.f, 10.f, 100.f, 3.402823466e+38F }; // FLT_MAX
     const float viewDepth = clamp(linearViewDepth, 0.f, 1000.f);
     
-    uint cascadeIdx = 0;
-    while (viewDepth > viewSplits[cascadeIdx])
-        ++cascadeIdx;
+    CascadeSample result;
+    result.cascade0 = 0;
+    result.cascade1 = 0;
+    result.blend = 0.f;
+    
+    [unroll]
+    for (uint cascadeIdx = 0; cascadeIdx < NUM_CASCADES; ++cascadeIdx)
+    {
+        if (viewDepth >= viewSplits[cascadeIdx] && viewDepth < viewSplits[cascadeIdx + 1])
+            result.cascade0 = cascadeIdx;
+    }
+    
+    const float blendStart = viewSplits[result.cascade0 + 1] * (1.f - CASCADE_BLEND_BAND);
+    if (viewDepth >= blendStart)
+    {
+        result.cascade1 = result.cascade0 + 1;
+        result.blend = (viewDepth - blendStart) / (viewSplits[result.cascade0 + 1] - blendStart);
+    }
+    
+    return result;
+}
+
+float computeCascadePCF(uint cascadeIdx, float3 posWorld, float depthBias, float2x2 poissonRotation, float2 texelSize)
+{
+    float shadow = 0.f;
     
     const float4 posShadow = mul(globalSceneData.shadowMatrices[cascadeIdx], float4(posWorld, 1.f));
-    
-    const float currDepth = posShadow.z;
     const float2 ndc = posShadow.xy * float2(0.5f, 0.5f) + float2(0.5f, 0.5f);
+    const float currDepth = posShadow.z;
+    
+    #define NUM_SAMPLES 16
+    for (int i = 0; i < NUM_SAMPLES; ++i)
+    {
+        // rotate poisson offset and sample
+        float2 offset = mul(poissonDisk[i], poissonRotation);
+        
+        float pcfDepth = cascadedShadowMap.Sample(cascadedShadowMapSampler, float3(ndc + offset * texelSize * 2.f, float(cascadeIdx))).r;
+        shadow += (currDepth - depthBias) > pcfDepth ? 1.f : 0.f;
+    }
+    return shadow / float(NUM_SAMPLES);
+}
+
+float computeShadowFactor(float linearViewDepth, float3 posWorld, float3 normal, float3 lightDir, float2 screenUV)
+{
+    CascadeSample cascade = getCascadeSample(linearViewDepth);
     
     uint width, height, numCascades;
     cascadedShadowMap.GetDimensions(width, height, numCascades);
@@ -322,8 +369,7 @@ float computeShadowFactor(float linearViewDepth, float3 posWorld, float3 normal,
     // if the current depth is behind the closest, we are in shadow
     // add a angle adjusted bias
     const float depthBias = lerp(0.005f, 0.0005f, dot(normal, lightDir));
-    
-    float shadow = 0.f;
+ 
     float2 texelSize = float2(1.f, 1.f) / float2(width, height);
     
     // randomly rotate poisson disk
@@ -334,17 +380,17 @@ float computeShadowFactor(float linearViewDepth, float3 posWorld, float3 normal,
     
     float2x2 rotationMatrix = float2x2(cosAngle, -sinAngle, sinAngle, cosAngle);
     
-    #define NUM_SAMPLES 16
-    for (int i = 0; i < NUM_SAMPLES; ++i)
+    float shadow0 = computeCascadePCF(cascade.cascade0, posWorld, depthBias, rotationMatrix, texelSize);
+    
+    if (cascade.blend > 0.f)
     {
-        // rotate poisson offset and sample
-        float2 offset = mul(poissonDisk[i], rotationMatrix);
-        
-        float pcfDepth = cascadedShadowMap.Sample(cascadedShadowMapSampler, float3(ndc + offset * texelSize * 2.f, float(cascadeIdx))).r;
-        shadow += (currDepth - depthBias) > pcfDepth ? 1.f : 0.f;
+        float shadow1 = computeCascadePCF(cascade.cascade1, posWorld, depthBias, rotationMatrix, texelSize);
+        return lerp(shadow0, shadow1, cascade.blend);
     }
-
-    return shadow / float(NUM_SAMPLES);
+    else
+    {
+        return shadow0;
+    }
 }
 
 PixelOutput simplePS(VertexOutput input)
