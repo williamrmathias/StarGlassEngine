@@ -449,17 +449,16 @@ static void computeShadowMatrices(const glm::vec3& lightDir, const glm::mat4& ca
         sceneMaxZ = std::max(sceneMaxZ, lightSpacePos.z);
     }
 
-    const float viewSplits[] = { 0.f, 10.f, 100.f, 1000.f };
+    const float viewSplits[] = { 0.f, 10.f, 50.f, 1000.f };
     for (uint32_t cascadeIdx = 0; cascadeIdx < kShadowMapCascades; ++cascadeIdx)
     {
         // transform view frustum into light space
         // NDC = [-1,1]x[-1,1]x[0,1]
-        // Each cascade will have (1/kShadowMapCascades) portion of the depth
 
-        glm::vec4 nearClip = cameraProj * glm::vec4{ 0.f, 0.f, -viewSplits[cascadeIdx], 1.f };
+        glm::vec4 nearClip = cameraProj * glm::vec4{ 0.f, 0.f, -viewSplits[0], 1.f };
         glm::vec4 farClip = cameraProj * glm::vec4{ 0.f, 0.f, -viewSplits[cascadeIdx+1], 1.f };
 
-        const float zNearNDC = (cascadeIdx == 0) ? 0.f : nearClip.z / nearClip.w;
+        const float zNearNDC = 0.f;
         const float zFarNDC = farClip.z / farClip.w;
 
         glm::vec4 ndcCorners[8] = {
@@ -1519,7 +1518,7 @@ void RenderEngine::initScene()
     glm::mat4 view =
         glm::lookAt(glm::vec3(0.f, 1.f, 0.f), glm::vec3(0.f, 0.f, 3.f), glm::vec3(0, 1.f, 0));
 
-    glm::mat4 projection = glm::perspective(glm::radians(45.f), 1280.f / 720.f, 0.1f, 100.f);
+    glm::mat4 projection = glm::perspective(glm::radians(45.f), 1280.f / 720.f, 0.1f, 1000.f);
     projection[1][1] *= -1; // correct gl -> vk
 
     globalSceneData = GlobalSceneData{

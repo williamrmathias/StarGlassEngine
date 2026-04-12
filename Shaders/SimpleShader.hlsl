@@ -314,7 +314,7 @@ CascadeSample getCascadeSample(float linearViewDepth)
     const uint kNumCascades = 3;
     const float kBlendBand = 0.2f;
     
-    const float viewSplits[] = { 0.f, 10.f, 100.f, 3.402823466e+38F }; // FLT_MAX
+    const float viewSplits[] = { 0.f, 10.f, 50.f, 3.402823466e+38F }; // FLT_MAX
     const float viewDepth = clamp(linearViewDepth, 0.f, 1000.f);
     
     CascadeSample result;
@@ -378,16 +378,8 @@ float computeShadowFactor(float linearViewDepth, float3 posWorld, float3 normal,
     float2x2 rotationMatrix = float2x2(cosAngle, -sinAngle, sinAngle, cosAngle);
     
     float shadow0 = computeCascadePCF(cascade.cascade0, posWorld, depthBias, rotationMatrix, texelSize);
-    
-    if (cascade.blend > 0.f)
-    {
-        float shadow1 = computeCascadePCF(cascade.cascade1, posWorld, depthBias, rotationMatrix, texelSize);
-        return lerp(shadow0, shadow1, cascade.blend);
-    }
-    else
-    {
-        return shadow0;
-    }
+    float shadow1 = computeCascadePCF(cascade.cascade1, posWorld, depthBias, rotationMatrix, texelSize);
+    return lerp(shadow0, shadow1, cascade.blend);
 }
 
 PixelOutput simplePS(VertexOutput input)
