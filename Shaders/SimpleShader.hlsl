@@ -7,7 +7,7 @@ struct GlobalSceneData
     float4x4 view;
     float4x4 viewproj;
     
-    float4x4 shadowMatrix;
+    float4x4 shadowMatrices[3];
     
     float3 viewPosition;
     float padding1;
@@ -59,10 +59,10 @@ Texture2D brdfLut;
 SamplerState brdfLutSampler;
 
 [[vk::binding(0, 5)]]
-Texture2D shadowMap;
+Texture2DArray cascadedShadowMap;
 
 [[vk::binding(0, 5)]]
-SamplerState shadowMapSampler;
+SamplerState cascadedShadowMapSampler;
 
 struct MaterialConstants
 {
@@ -93,9 +93,8 @@ struct VertexOutput
 {
     float4 position : SV_Position;
     float3 positionWorld : TEXCOORD0;
-    float3 positionShadow : TEXCOORD1;
-    float3 normal : TEXCOORD2;
-    float2 uv : TEXCOORD3;
+    float3 normal : TEXCOORD1;
+    float2 uv : TEXCOORD2;
     float4 color : COLOR0;
 };
 
@@ -110,7 +109,6 @@ VertexOutput simpleVS(VertexInput input)
     float4x4 mvp = mul(globalSceneData.viewproj, pushConstants.model);
     output.position = mul(mvp, float4(input.position, 1.f));
     output.positionWorld = mul(pushConstants.model, float4(input.position, 1.f)).xyz;
-    output.positionShadow = mul(globalSceneData.shadowMatrix, float4(output.positionWorld, 1.f)).xyz;
     
     float3 N = mul(pushConstants.model, float4(input.normal, 0.f)).xyz;
 
@@ -304,19 +302,71 @@ static const float2 poissonDisk[16] =
     float2(0.19984126, 0.78641367), float2(0.14383161, -0.14100790)
 };
 
-float computeShadowFactor(float3 positionShadow, float3 normal, float3 lightDir, float2 screenUV)
+struct CascadeSample
 {
-    const float currDepth = positionShadow.z;
-    const float2 ndc = positionShadow.xy * float2(0.5f, 0.5f) + float2(0.5f, 0.5f);
+    uint cascade0;
+    uint cascade1;
+    float blend;
+};
+
+CascadeSample getCascadeSample(float linearViewDepth)
+{
+    const uint kNumCascades = 3;
+    const float kBlendBand = 0.2f;
     
-    uint width, height;
-    shadowMap.GetDimensions(width, height);
+    const float viewSplits[] = { 0.f, 10.f, 50.f, 3.402823466e+38F }; // FLT_MAX
+    const float viewDepth = clamp(linearViewDepth, 0.f, 1000.f);
+    
+    CascadeSample result;
+    result.cascade0 = 0;
+    result.cascade1 = 0;
+    result.blend = 0.f;
+    
+    result.cascade0 = (viewDepth >= viewSplits[1]) + (viewDepth >= viewSplits[2]);
+    
+    const float splitEnd = viewSplits[result.cascade0 + 1];
+    const float blendStart = splitEnd * (1.f - kBlendBand);
+    
+    result.blend = saturate((viewDepth - blendStart) / (splitEnd - blendStart));
+    
+    const uint isLast = (result.cascade0 == kNumCascades - 1);
+    result.blend *= (1 - isLast);
+    
+    result.cascade1 = min(result.cascade0 + (result.blend > 0.f), kNumCascades - 1);
+    return result;
+}
+
+float computeCascadePCF(uint cascadeIdx, float3 posWorld, float depthBias, float2x2 poissonRotation, float2 texelSize)
+{
+    float shadow = 0.f;
+    
+    const float4 posShadow = mul(globalSceneData.shadowMatrices[cascadeIdx], float4(posWorld, 1.f));
+    const float2 ndc = posShadow.xy * float2(0.5f, 0.5f) + float2(0.5f, 0.5f);
+    const float currDepth = posShadow.z;
+    
+    #define NUM_SAMPLES 16
+    for (int i = 0; i < NUM_SAMPLES; ++i)
+    {
+        // rotate poisson offset and sample
+        float2 offset = mul(poissonDisk[i], poissonRotation);
+        
+        float pcfDepth = cascadedShadowMap.Sample(cascadedShadowMapSampler, float3(ndc + offset * texelSize * 2.f, float(cascadeIdx))).r;
+        shadow += (currDepth - depthBias) > pcfDepth ? 1.f : 0.f;
+    }
+    return shadow / float(NUM_SAMPLES);
+}
+
+float computeShadowFactor(float linearViewDepth, float3 posWorld, float3 normal, float3 lightDir, float2 screenUV)
+{
+    CascadeSample cascade = getCascadeSample(linearViewDepth);
+    
+    uint width, height, numCascades;
+    cascadedShadowMap.GetDimensions(width, height, numCascades);
     
     // if the current depth is behind the closest, we are in shadow
     // add a angle adjusted bias
     const float depthBias = lerp(0.005f, 0.0005f, dot(normal, lightDir));
-    
-    float shadow = 0.f;
+ 
     float2 texelSize = float2(1.f, 1.f) / float2(width, height);
     
     // randomly rotate poisson disk
@@ -327,17 +377,9 @@ float computeShadowFactor(float3 positionShadow, float3 normal, float3 lightDir,
     
     float2x2 rotationMatrix = float2x2(cosAngle, -sinAngle, sinAngle, cosAngle);
     
-    #define NUM_SAMPLES 16
-    for (int i = 0; i < NUM_SAMPLES; ++i)
-    {
-        // rotate poisson offset and sample
-        float2 offset = mul(poissonDisk[i], rotationMatrix);
-        
-        float pcfDepth = shadowMap.Sample(shadowMapSampler, ndc + offset * texelSize * 2.f).r;
-        shadow += (currDepth - depthBias) > pcfDepth ? 1.f : 0.f;
-    }
-
-    return shadow / float(NUM_SAMPLES);
+    float shadow0 = computeCascadePCF(cascade.cascade0, posWorld, depthBias, rotationMatrix, texelSize);
+    float shadow1 = computeCascadePCF(cascade.cascade1, posWorld, depthBias, rotationMatrix, texelSize);
+    return lerp(shadow0, shadow1, cascade.blend);
 }
 
 PixelOutput simplePS(VertexOutput input)
@@ -367,7 +409,8 @@ PixelOutput simplePS(VertexOutput input)
     
     float3 ambient = brdf_IBL(baseColor.rgb, roughness, metalness, viewDirection, lightDirection, normal);
     
-    const float shadowFactor = computeShadowFactor(input.positionShadow, input.normal, lightDirection, input.position.xy);
+    const float linearViewDepth = -mul(globalSceneData.view, float4(input.positionWorld, 1.f)).z;
+    const float shadowFactor = computeShadowFactor(linearViewDepth, input.positionWorld, input.normal, lightDirection, input.position.xy);
     radiance = radiance * (1.f - shadowFactor); // TODO conditional skip the direct brdf
     
     result.color = float4(radiance + ambient, alpha);
@@ -444,5 +487,44 @@ PixelOutput uvDebugPS(VertexOutput input)
     PixelOutput result;
     
     result.color = float4(input.uv.xy, 0.f, 1.f);
+    return result;
+}
+
+PixelOutput linearViewDepthDebugPS(VertexOutput input)
+{
+    PixelOutput result;
+    
+    const float linearViewDepth = -mul(globalSceneData.view, float4(input.positionWorld, 1.f)).z;
+    result.color = float4(linearViewDepth / 100.f, 0.f, 0.f, 1.f);
+    
+    return result;
+}
+
+PixelOutput shadowCascadeDebugPS(VertexOutput input)
+{
+    PixelOutput result;
+    
+    const float linearViewDepth = -mul(globalSceneData.view, float4(input.positionWorld, 1.f)).z;
+    CascadeSample cascade = getCascadeSample(linearViewDepth);
+    
+    // static const float3 cascadeColorTable[] = { float3(1.f, 0.f, 0.f), float3(0.f, 1.f, 0.f), float3(0.f, 0.f, 1.f) }; -- amd driver bug with sampling
+    
+    float3 color0;
+    if (cascade.cascade0 == 0)
+        color0 = float3(1.f, 0.f, 0.f);
+    if (cascade.cascade0 == 1)
+        color0 = float3(0.f, 1.f, 0.f);
+    if (cascade.cascade0 == 2)
+        color0 = float3(0.f, 0.f, 1.f);
+    
+    float3 color1;
+    if (cascade.cascade1 == 0)
+        color1 = float3(1.f, 0.f, 0.f);
+    if (cascade.cascade1 == 1)
+        color1 = float3(0.f, 1.f, 0.f);
+    if (cascade.cascade1 == 2)
+        color1 = float3(0.f, 0.f, 1.f);
+    
+    result.color = float4(lerp(color0, color1, cascade.blend), 1.f);
     return result;
 }

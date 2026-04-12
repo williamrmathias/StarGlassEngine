@@ -137,6 +137,10 @@ int main()
                     pipeline = PipelineType::VertexNormalDebug;
                 if (ImGui::Selectable("UvDebug", pipeline == PipelineType::UvDebug))
                     pipeline = PipelineType::UvDebug;
+                if (ImGui::Selectable("LinearDepthDebug", pipeline == PipelineType::LinearViewDepthDebug))
+                    pipeline = PipelineType::LinearViewDepthDebug;
+                if (ImGui::Selectable("ShadowCascadeDebug", pipeline == PipelineType::ShadowCascadeDebug))
+                    pipeline = PipelineType::ShadowCascadeDebug;
 
                 renderEngine.setActiveOpaquePassPipeline(pipeline);
             }

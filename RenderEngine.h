@@ -47,13 +47,14 @@ constexpr size_t NUM_FRAMES = 2;
 constexpr uint32_t NUM_MATERIALS_MAX = 1000;
 
 constexpr VkExtent2D kShadowMapResolution = VkExtent2D{ 4096, 4096 };
+constexpr uint32_t kShadowMapCascades = 3;
 
 struct GlobalSceneData
 {
     glm::mat4 view;
     glm::mat4 viewproj;
 
-    glm::mat4 shadowMatrix;
+    glm::mat4 shadowMatrices[kShadowMapCascades];
 
     glm::vec3 viewPosition;
     float padding1;
@@ -98,9 +99,10 @@ struct IBLPushConstants
 struct ShadowPushConstant
 {
     glm::mat4 model;
+    uint32_t cascadeIdx;
     float alphaCutoff;
 
-    float padding[15];
+    float padding[14];
 };
 
 static_assert(sizeof(PushConstants) <= 128);
@@ -131,6 +133,15 @@ struct RenderTarget
     void cleanup(Device* device);
 };
 
+struct CascadedShadowMap
+{
+    gfx::AllocatedImage imageArray;
+    VkImageView cascadeTargetViews[kShadowMapCascades];
+    VkImageView shaderView;
+
+    void cleanup(Device* device);
+};
+
 class RenderEngine
 {
 public:
@@ -149,7 +160,7 @@ public:
     // intermediate render targets
     RenderTarget hdrColorTarget;
     RenderTarget depthTarget;
-    RenderTarget shadowTarget;
+    CascadedShadowMap csm;
 
     AllocatedImage skybox;
 
@@ -173,7 +184,7 @@ public:
 
         AllocatedBuffer uniformBuffer;
         VkDescriptorSet globalDescriptorSet;
-        VkDescriptorSet shadowMapDescriptorSet;
+        VkDescriptorSet csmDescriptorSet;
         VkDescriptorSet screenSpaceDescriptorSet;
 
         void cleanup(Device* device);
@@ -191,6 +202,8 @@ public:
         NormalDebug,
         VertexNormalDebug,
         UvDebug,
+        LinearViewDepthDebug,
+        ShadowCascadeDebug,
 
         // screen space pipelines
         ToneMap,
@@ -208,6 +221,8 @@ public:
     Pipeline normalPipeline;
     Pipeline vertNormalPipeline;
     Pipeline uvPipeline;
+    Pipeline linearDepthPipeline;
+    Pipeline shadowCascadePipeline;
 
     Pipeline shadowPipeline;
 
@@ -247,7 +262,7 @@ private:
 
     RenderTarget createHDRColorTarget() const;
     RenderTarget createDepthTarget() const;
-    RenderTarget createShadowTarget() const;
+    CascadedShadowMap createCascadedShadowMap() const;
 
     void initRenderTargets();
     void initDescriptorPool();

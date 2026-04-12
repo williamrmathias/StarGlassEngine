@@ -44,6 +44,9 @@ struct AllocatedImage
 AllocatedImage createAllocatedImage(
     Device* device, VkImageUsageFlags usage, VkFormat format, VkExtent2D extents, bool useMips);
 
+AllocatedImage createAllocatedImageArray(
+    Device* device, VkImageUsageFlags usage, VkFormat format, VkExtent2D extents, uint32_t arrayLayers);
+
 AllocatedImage createAllocatedCubemapImage(
     Device* device, VkImageUsageFlags usage, VkFormat format, uint32_t dimension, bool useMips);
 
@@ -57,6 +60,10 @@ VkImageView createImageView(
 );
 
 VkImageView createCubemapView(
+    Device* device, VkImage image, VkFormat format, VkImageAspectFlags aspect
+);
+
+VkImageView createImageArrayView(
     Device* device, VkImage image, VkFormat format, VkImageAspectFlags aspect
 );
 

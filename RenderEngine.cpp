@@ -92,7 +92,7 @@ void RenderEngine::render()
     );
 
     transitionImageLayoutCoarse(
-        cmd, shadowTarget.image.image,
+        cmd, csm.imageArray.image,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
         VK_IMAGE_ASPECT_DEPTH_BIT
     );
@@ -116,13 +116,13 @@ void RenderEngine::render()
 
     // now that we've rendered the shadow map, make it readable for the main pass
     transitionImageLayoutCoarse(
-        cmd, shadowTarget.image.image,
+        cmd, csm.imageArray.image,
         VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_IMAGE_ASPECT_DEPTH_BIT
     );
 
     vkCmdBindDescriptorSets(
-        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activeOpaquePipeline.layout, 5, 1, &frame.shadowMapDescriptorSet,
+        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activeOpaquePipeline.layout, 5, 1, &frame.csmDescriptorSet,
         0, nullptr
     );
 
@@ -305,6 +305,15 @@ void RenderTarget::cleanup(gfx::Device* device)
     vkDestroyImageView(device->device, view, nullptr);
 }
 
+void CascadedShadowMap::cleanup(gfx::Device* device)
+{
+    gfx::destroyAllocatedImage(device, imageArray);
+    for (uint32_t cascadeIdx = 0; cascadeIdx < kShadowMapCascades; ++cascadeIdx)
+        vkDestroyImageView(device->device, cascadeTargetViews[cascadeIdx], nullptr);
+
+    vkDestroyImageView(device->device, shaderView, nullptr);
+}
+
 void RenderEngine::cleanup()
 {
     vkDeviceWaitIdle(device->device);
@@ -342,6 +351,8 @@ void RenderEngine::cleanup()
         normalPipeline.cleanup(device.get());
         vertNormalPipeline.cleanup(device.get());
         uvPipeline.cleanup(device.get());
+        linearDepthPipeline.cleanup(device.get());
+        shadowCascadePipeline.cleanup(device.get());
 
         shadowPipeline.cleanup(device.get());
 
@@ -357,7 +368,7 @@ void RenderEngine::cleanup()
 
     hdrColorTarget.cleanup(device.get());
     depthTarget.cleanup(device.get());
-    shadowTarget.cleanup(device.get());
+    csm.cleanup(device.get());
 
     vkDestroySampler(device->device, screenSpaceSampler, nullptr);
 
@@ -414,44 +425,11 @@ void RenderEngine::endAndSubmitImmediateCommands()
     VK_Check(vkWaitForFences(device->device, 1, &immediateFence, true, 9'999'999'999));
 }
 
-static glm::mat4 computeShadowMatrix(const glm::vec3& lightDir, const glm::mat4& viewproj, const Extent& sceneAABB)
+static void computeShadowMatrices(const glm::vec3& lightDir, const glm::mat4& cameraView, const glm::mat4& cameraProj, const Extent& sceneAABB, glm::mat4* const shadowMatrices)
 {
     // light view matrix looking from the light direction towards the origin
     glm::vec3 up = lightDir.y == 1.f || lightDir.y == -1.f ? glm::vec3{ 0.f, 0.f, 1.f } : glm::vec3{ 0.f, 1.f, 0.f };
     glm::mat4 shadowView = glm::lookAt(lightDir, glm::vec3{ 0.f, 0.f, 0.f }, up);
-
-    // transform view frustum into light space
-    // NDC = [-1,1]x[-1,1]x[0,1]
-    glm::vec4 viewCorners[8] = {
-        {-1.0f, -1.0f, 0.0f, 1.0f},
-        { 1.0f, -1.0f, 0.0f, 1.0f},
-        { 1.0f,  1.0f, 0.0f, 1.0f},
-        {-1.0f,  1.0f, 0.0f, 1.0f},
-        {-1.0f, -1.0f, 1.0f, 1.0f},
-        { 1.0f, -1.0f, 1.0f, 1.0f},
-        { 1.0f,  1.0f, 1.0f, 1.0f},
-        {-1.0f,  1.0f, 1.0f, 1.0f}
-    };
-
-    float viewMinX = FLT_MAX, viewMinY = FLT_MAX, viewMinZ = FLT_MAX;
-    float viewMaxX = -FLT_MAX, viewMaxY = -FLT_MAX, viewMaxZ = -FLT_MAX;
-    for (glm::vec4& corner : viewCorners)
-    {
-        // 1. NDC -> WorldSpace w/ perspective divide
-        corner = glm::inverse(viewproj) * corner;
-        corner /= corner.w;
-
-        // 2. WorldSpace -> LightSpace
-        corner = shadowView * corner;
-
-        viewMinX = std::min(viewMinX, corner.x);
-        viewMinY = std::min(viewMinY, corner.y);
-        viewMinZ = std::min(viewMinZ, corner.z);
-
-        viewMaxX = std::max(viewMaxX, corner.x);
-        viewMaxY = std::max(viewMaxY, corner.y);
-        viewMaxZ = std::max(viewMaxZ, corner.z);
-    }
 
     // transform scene AABB into light space
     std::array<glm::vec3, 8> sceneCorners = sceneAABB.getCorners();
@@ -471,33 +449,77 @@ static glm::mat4 computeShadowMatrix(const glm::vec3& lightDir, const glm::mat4&
         sceneMaxZ = std::max(sceneMaxZ, lightSpacePos.z);
     }
 
-    float left      = std::max(viewMinX, sceneMinX),    right = std::min(viewMaxX, sceneMaxX);
-    float bottom    = std::max(viewMinY, sceneMinY),    top = std::min(viewMaxY, sceneMaxY);
-    float zNear     = -sceneMaxZ,                       zFar = -std::max(viewMinZ, sceneMinZ);
+    const float viewSplits[] = { 0.f, 10.f, 50.f, 1000.f };
+    for (uint32_t cascadeIdx = 0; cascadeIdx < kShadowMapCascades; ++cascadeIdx)
+    {
+        // transform view frustum into light space
+        // NDC = [-1,1]x[-1,1]x[0,1]
 
-    // texel snapping
+        glm::vec4 nearClip = cameraProj * glm::vec4{ 0.f, 0.f, -viewSplits[0], 1.f };
+        glm::vec4 farClip = cameraProj * glm::vec4{ 0.f, 0.f, -viewSplits[cascadeIdx+1], 1.f };
 
-    // 1. Get World Space size of each texel
-    const float shadowWidth = (right - left);
-    const float shadowHeight = (top - bottom);
+        const float zNearNDC = 0.f;
+        const float zFarNDC = farClip.z / farClip.w;
 
-    const float texelSizeX = shadowWidth / float(kShadowMapResolution.width);
-    const float texelSizeY = shadowHeight / float(kShadowMapResolution.height);
+        glm::vec4 ndcCorners[8] = {
+            {-1.0f, -1.0f, zNearNDC, 1.0f},
+            { 1.0f, -1.0f, zNearNDC, 1.0f},
+            { 1.0f,  1.0f, zNearNDC, 1.0f},
+            {-1.0f,  1.0f, zNearNDC, 1.0f},
+            {-1.0f, -1.0f, zFarNDC, 1.0f},
+            { 1.0f, -1.0f, zFarNDC, 1.0f},
+            { 1.0f,  1.0f, zFarNDC, 1.0f},
+            {-1.0f,  1.0f, zFarNDC, 1.0f}
+        };
 
-    // 2. Snap center
-    float centerX = (left + right) * 0.5f;
-    float centerY = (bottom + top) * 0.5f;
+        float viewMinX = FLT_MAX, viewMinY = FLT_MAX, viewMinZ = FLT_MAX;
+        float viewMaxX = -FLT_MAX, viewMaxY = -FLT_MAX, viewMaxZ = -FLT_MAX;
+        for (const glm::vec4& corner : ndcCorners)
+        {
+            // 1. NDC -> WorldSpace w/ perspective divide
+            glm::vec4 lightSpacePos = glm::inverse(cameraProj * cameraView) * corner;
+            lightSpacePos /= lightSpacePos.w;
 
-    centerX = floorf(centerX / texelSizeX) * texelSizeX;
-    centerY = floorf(centerY / texelSizeY) * texelSizeY;
+            // 2. WorldSpace -> LightSpace
+            lightSpacePos = shadowView * lightSpacePos;
 
-    glm::mat4 shadowProj = glm::orthoZO(
-        centerX - (shadowWidth * 0.5f), centerX + (shadowWidth * 0.5f),
-        centerY - (shadowHeight * 0.5f), centerY + (shadowHeight * 0.5f),
-        zNear, zFar
-    );
+            viewMinX = std::min(viewMinX, lightSpacePos.x);
+            viewMinY = std::min(viewMinY, lightSpacePos.y);
+            viewMinZ = std::min(viewMinZ, lightSpacePos.z);
 
-    return shadowProj * shadowView;
+            viewMaxX = std::max(viewMaxX, lightSpacePos.x);
+            viewMaxY = std::max(viewMaxY, lightSpacePos.y);
+            viewMaxZ = std::max(viewMaxZ, lightSpacePos.z);
+        }
+
+        float left = std::max(viewMinX, sceneMinX), right = std::min(viewMaxX, sceneMaxX);
+        float bottom = std::max(viewMinY, sceneMinY), top = std::min(viewMaxY, sceneMaxY);
+        float zNear = -sceneMaxZ, zFar = -std::max(viewMinZ, sceneMinZ);
+
+        // texel snapping
+
+        // 1. Get World Space size of each texel
+        const float shadowWidth = (right - left);
+        const float shadowHeight = (top - bottom);
+
+        const float texelSizeX = shadowWidth / float(kShadowMapResolution.width);
+        const float texelSizeY = shadowHeight / float(kShadowMapResolution.height);
+
+        // 2. Snap center
+        float centerX = (left + right) * 0.5f;
+        float centerY = (bottom + top) * 0.5f;
+
+        centerX = floorf(centerX / texelSizeX) * texelSizeX;
+        centerY = floorf(centerY / texelSizeY) * texelSizeY;
+
+        glm::mat4 shadowProj = glm::orthoZO(
+            centerX - (shadowWidth * 0.5f), centerX + (shadowWidth * 0.5f),
+            centerY - (shadowHeight * 0.5f), centerY + (shadowHeight * 0.5f),
+            zNear, zFar
+        );
+
+        shadowMatrices[cascadeIdx] = shadowProj * shadowView;
+    }
 }
 
 void RenderEngine::setSunDirection(float azimuth, float altitude)
@@ -513,7 +535,9 @@ void RenderEngine::setSunDirection(float azimuth, float altitude)
         cosAltitude * glm::cos(radAzimuth) 
     };
 
-    globalSceneData.shadowMatrix = computeShadowMatrix(globalSceneData.lightDirection, globalSceneData.viewproj, sceneAABB);
+    glm::mat4 projection = glm::perspective(glm::radians(45.f), 2560.f / 1440.f, 0.1f, 1000.f);
+    projection[1][1] *= -1; // correct gl -> vk
+    computeShadowMatrices(globalSceneData.lightDirection, globalSceneData.view, projection, sceneAABB, globalSceneData.shadowMatrices);
 }
 
 void RenderEngine::setSunLuminance(float luminance)
@@ -523,13 +547,13 @@ void RenderEngine::setSunLuminance(float luminance)
 
 void RenderEngine::setViewMatrix(const glm::mat4 view)
 {
-    glm::mat4 projection = glm::perspective(glm::radians(45.f), 1280.f / 720.f, 0.1f, 100.f);
+    glm::mat4 projection = glm::perspective(glm::radians(45.f), 2560.f / 1440.f, 0.1f, 1000.f);
     projection[1][1] *= -1; // correct gl -> vk
 
     globalSceneData.view = view;
     globalSceneData.viewproj = projection * view;
 
-    globalSceneData.shadowMatrix = computeShadowMatrix(globalSceneData.lightDirection, globalSceneData.viewproj, sceneAABB);
+    computeShadowMatrices(globalSceneData.lightDirection, globalSceneData.view, projection, sceneAABB, globalSceneData.shadowMatrices);
 }
 
 void RenderEngine::setViewPosition(const glm::vec3 viewPosition)
@@ -561,6 +585,12 @@ void RenderEngine::setActiveOpaquePassPipeline(PipelineType pipeline)
         break;
     case gfx::RenderEngine::PipelineType::UvDebug:
         activeOpaquePipeline = uvPipeline;
+        break;
+    case gfx::RenderEngine::PipelineType::LinearViewDepthDebug:
+        activeOpaquePipeline = linearDepthPipeline;
+        break;
+    case gfx::RenderEngine::PipelineType::ShadowCascadeDebug:
+        activeOpaquePipeline = shadowCascadePipeline;
         break;
     default:
         break;
@@ -635,9 +665,9 @@ RenderTarget RenderEngine::createDepthTarget() const
     return target;
 }
 
-RenderTarget RenderEngine::createShadowTarget() const
+CascadedShadowMap RenderEngine::createCascadedShadowMap() const
 {
-    RenderTarget target;
+    CascadedShadowMap csm;
 
     VkFormat depthFormat = VK_FORMAT_D16_UNORM;
 
@@ -651,22 +681,25 @@ RenderTarget RenderEngine::createShadowTarget() const
         std::abort();
     }
 
-    target.image = gfx::createAllocatedImage(
+    csm.imageArray = gfx::createAllocatedImageArray(
         device.get(),
         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-        depthFormat, kShadowMapResolution, /*useMips*/false
+        depthFormat, kShadowMapResolution, kShadowMapCascades
     );
 
-    target.view = createImageView(device.get(), target.image.image, target.image.format, VK_IMAGE_ASPECT_DEPTH_BIT);
+    for (uint32_t cascadeIdx = 0; cascadeIdx < kShadowMapCascades; ++cascadeIdx)
+        csm.cascadeTargetViews[cascadeIdx] = createImageView(device.get(), csm.imageArray.image, csm.imageArray.format, VK_IMAGE_ASPECT_DEPTH_BIT, cascadeIdx);
 
-    return target;
+    csm.shaderView = createImageArrayView(device.get(), csm.imageArray.image, csm.imageArray.format, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+    return csm;
 }
 
 void RenderEngine::initRenderTargets()
 {
     hdrColorTarget = createHDRColorTarget();
     depthTarget = createDepthTarget();
-    shadowTarget = createShadowTarget();
+    csm = createCascadedShadowMap();
 }
 
 void RenderEngine::initDescriptorPool()
@@ -999,21 +1032,21 @@ void RenderEngine::initFrameData()
 
     VK_Check(vkAllocateDescriptorSets(device->device, &descriptorInfo, descriptorSets.data()));
     for (size_t i = 0; i < NUM_FRAMES; i++)
-        frames[i].shadowMapDescriptorSet = descriptorSets[i];
+        frames[i].csmDescriptorSet = descriptorSets[i];
 
     // update screen space descriptor sets
     for (size_t i = 0; i < NUM_FRAMES; i++)
     {
         VkDescriptorImageInfo imageInfo{
             .sampler = screenSpaceSampler,
-            .imageView = shadowTarget.view,
+            .imageView = csm.shaderView,
             .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         };
 
         VkWriteDescriptorSet write{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .pNext = nullptr,
-            .dstSet = frames[i].shadowMapDescriptorSet,
+            .dstSet = frames[i].csmDescriptorSet,
             .dstBinding = 0,
             .dstArrayElement = 0,
             .descriptorCount = 1,
@@ -1127,12 +1160,26 @@ void RenderEngine::initGraphicsPipelines()
         pipelineBuilder.setShaderStages(vertShader, "simpleVS", uvFragShader, "uvDebugPS");
         uvPipeline = pipelineBuilder.build(device.get());
 
+        // linear view depth
+        std::filesystem::path linearDepthFragShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/linearViewDepthDebugPS.spirv");
+        VkShaderModule linearDepthFragShader = loadShaderModule(linearDepthFragShaderPath.string().c_str());
+        pipelineBuilder.setShaderStages(vertShader, "simpleVS", linearDepthFragShader, "linearViewDepthDebugPS");
+        linearDepthPipeline = pipelineBuilder.build(device.get());
+
+        // shadow cascades
+        std::filesystem::path shadowCascadeFragShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/shadowCascadeDebugPS.spirv");
+        VkShaderModule shadowCascadeFragShader = loadShaderModule(shadowCascadeFragShaderPath.string().c_str());
+        pipelineBuilder.setShaderStages(vertShader, "simpleVS", shadowCascadeFragShader, "shadowCascadeDebugPS");
+        shadowCascadePipeline = pipelineBuilder.build(device.get());
+
         vkDestroyShaderModule(device->device, baseColorFragShader, nullptr);
         vkDestroyShaderModule(device->device, metalFragShader, nullptr);
         vkDestroyShaderModule(device->device, roughFragShader, nullptr);
         vkDestroyShaderModule(device->device, normalFragShader, nullptr);
         vkDestroyShaderModule(device->device, vertNormalFragShader, nullptr);
         vkDestroyShaderModule(device->device, uvFragShader, nullptr);
+        vkDestroyShaderModule(device->device, linearDepthFragShader, nullptr);
+        vkDestroyShaderModule(device->device, shadowCascadeFragShader, nullptr);
     }
 
     activeOpaquePipeline = opaquePipeline;
@@ -1151,7 +1198,7 @@ void RenderEngine::initShadowPipeline()
     VkShaderModule fragShader = loadShaderModule(fragmentShaderPath.string().c_str());
 
     // render attachments
-    pipelineBuilder.setDepthAttachmentFormat(shadowTarget.image.format);
+    pipelineBuilder.setDepthAttachmentFormat(csm.imageArray.format);
 
     // shader info
     pipelineBuilder.setShaderStages(vertShader, "shadowVS", fragShader, "shadowPS");
@@ -1471,7 +1518,7 @@ void RenderEngine::initScene()
     glm::mat4 view =
         glm::lookAt(glm::vec3(0.f, 1.f, 0.f), glm::vec3(0.f, 0.f, 3.f), glm::vec3(0, 1.f, 0));
 
-    glm::mat4 projection = glm::perspective(glm::radians(45.f), 1280.f / 720.f, 0.1f, 100.f);
+    glm::mat4 projection = glm::perspective(glm::radians(45.f), 1280.f / 720.f, 0.1f, 1000.f);
     projection[1][1] *= -1; // correct gl -> vk
 
     globalSceneData = GlobalSceneData{
@@ -1482,7 +1529,7 @@ void RenderEngine::initScene()
     };
 
     // load scene
-    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/sponza-png.glb"); 
+    std::filesystem::path gltfPath = std::filesystem::current_path() / std::filesystem::path("Assets/Bistro.glb"); 
     loadedGltf = std::make_unique<LoadedGltf>(this, gltfPath.string().c_str());
 
     // upload draws
@@ -1723,104 +1770,108 @@ void RenderEngine::drawScene(VkCommandBuffer cmd)
 
 void RenderEngine::renderShadowMap(VkCommandBuffer cmd)
 {
-    VkRenderingAttachmentInfo depthAttachInfo{
-        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-        .pNext = nullptr,
-        .imageView = shadowTarget.view,
-        .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-        .resolveMode = VK_RESOLVE_MODE_NONE,
-        .resolveImageView = VK_NULL_HANDLE,
-        .resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-        .clearValue = VkClearValue{.depthStencil = VkClearDepthStencilValue{.depth = 1.f, .stencil = 1}}
-    };
-
-    VkRenderingInfo renderInfo{
-        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .renderArea = VkRect2D{ VkOffset2D{0, 0}, shadowTarget.image.extents},
-        .layerCount = 1,
-        .viewMask = 0,
-        .colorAttachmentCount = 0,
-        .pColorAttachments = nullptr,
-        .pDepthAttachment = &depthAttachInfo,
-        .pStencilAttachment = nullptr
-    };
-
-    vkCmdBeginRendering(cmd, &renderInfo);
-
-    // set dynamic viewport and scissor state
-    VkViewport viewport{
-        .x = 0.f,
-        .y = 0.f,
-        .width = static_cast<float>(shadowTarget.image.extents.width),
-        .height = static_cast<float>(shadowTarget.image.extents.height),
-        .minDepth = 0.f,
-        .maxDepth = 1.f
-    };
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
-
-    VkRect2D scissor{
-        .offset = VkOffset2D{ 0, 0 },
-        .extent = shadowTarget.image.extents
-    };
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
-
-    Frustum shadowFrustum = extractFrustum(globalSceneData.shadowMatrix);
-
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline.pipeline);
-
-    MaterialHandle currentMaterialHandle = kInvalidHandle;
-    MaterialConstants currentMaterialConstants;
-    for (const DrawCommand& draw : renderQueueOpaque)
+    for (uint32_t cascadeIdx = 0; cascadeIdx < kShadowMapCascades; ++cascadeIdx)
     {
-        // cull non visible draws
-        if (!isVisible(draw, shadowFrustum))
-        {
-            continue;
-        }
-
-        // bind geometry buffers
-        gfx::AllocatedBuffer vertexBuffer = loadedGltf->buffers[draw.vertexBuffer];
-        VkDeviceSize vertexBufferOffset{ 0 };
-        vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer.buffer, &vertexBufferOffset);
-
-        gfx::AllocatedBuffer indexBuffer = loadedGltf->buffers[draw.indexBuffer];
-        VkDeviceSize indexBufferOffset{ 0 };
-        vkCmdBindIndexBuffer(cmd, indexBuffer.buffer, indexBufferOffset, draw.indexType);
-
-        // bind material
-        if (currentMaterialHandle != draw.material)
-        {
-            currentMaterialHandle = draw.material;
-            const Material& material = loadedGltf->materials[currentMaterialHandle];
-            vkCmdBindDescriptorSets(
-                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline.layout,
-                1, 1, &material.descriptorSet, 0, nullptr
-            );
-
-            currentMaterialConstants = material.constants;
-        }
-
-        // bind push constants
-        ShadowPushConstant pushConstants{
-            .model = draw.transform,
-            .alphaCutoff = currentMaterialConstants.alphaCutoff
+        VkRenderingAttachmentInfo depthAttachInfo{
+            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .pNext = nullptr,
+            .imageView = csm.cascadeTargetViews[cascadeIdx],
+            .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+            .resolveMode = VK_RESOLVE_MODE_NONE,
+            .resolveImageView = VK_NULL_HANDLE,
+            .resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .clearValue = VkClearValue{.depthStencil = VkClearDepthStencilValue{.depth = 1.f, .stencil = 1}}
         };
 
-        vkCmdPushConstants(
-            cmd, shadowPipeline.layout,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-            sizeof(pushConstants), &pushConstants
-        );
+        VkRenderingInfo renderInfo{
+            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .renderArea = VkRect2D{ VkOffset2D{0, 0}, csm.imageArray.extents},
+            .layerCount = 1,
+            .viewMask = 0,
+            .colorAttachmentCount = 0,
+            .pColorAttachments = nullptr,
+            .pDepthAttachment = &depthAttachInfo,
+            .pStencilAttachment = nullptr
+        };
 
-        // draw primitive
-        vkCmdDrawIndexed(cmd, draw.indexCount, 1, 0, 0, 0);
+        vkCmdBeginRendering(cmd, &renderInfo);
+
+        // set dynamic viewport and scissor state
+        VkViewport viewport{
+            .x = 0.f,
+            .y = 0.f,
+            .width = static_cast<float>(csm.imageArray.extents.width),
+            .height = static_cast<float>(csm.imageArray.extents.height),
+            .minDepth = 0.f,
+            .maxDepth = 1.f
+        };
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+        VkRect2D scissor{
+            .offset = VkOffset2D{ 0, 0 },
+            .extent = csm.imageArray.extents
+        };
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+        Frustum shadowFrustum = extractFrustum(globalSceneData.shadowMatrices[cascadeIdx]);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline.pipeline);
+
+        MaterialHandle currentMaterialHandle = kInvalidHandle;
+        MaterialConstants currentMaterialConstants;
+        for (const DrawCommand& draw : renderQueueOpaque)
+        {
+            // cull non visible draws
+            if (!isVisible(draw, shadowFrustum))
+            {
+                continue;
+            }
+
+            // bind geometry buffers
+            gfx::AllocatedBuffer vertexBuffer = loadedGltf->buffers[draw.vertexBuffer];
+            VkDeviceSize vertexBufferOffset{ 0 };
+            vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer.buffer, &vertexBufferOffset);
+
+            gfx::AllocatedBuffer indexBuffer = loadedGltf->buffers[draw.indexBuffer];
+            VkDeviceSize indexBufferOffset{ 0 };
+            vkCmdBindIndexBuffer(cmd, indexBuffer.buffer, indexBufferOffset, draw.indexType);
+
+            // bind material
+            if (currentMaterialHandle != draw.material)
+            {
+                currentMaterialHandle = draw.material;
+                const Material& material = loadedGltf->materials[currentMaterialHandle];
+                vkCmdBindDescriptorSets(
+                    cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline.layout,
+                    1, 1, &material.descriptorSet, 0, nullptr
+                );
+
+                currentMaterialConstants = material.constants;
+            }
+
+            // bind push constants
+            ShadowPushConstant pushConstants{
+                .model = draw.transform,
+                .cascadeIdx = cascadeIdx,
+                .alphaCutoff = currentMaterialConstants.alphaCutoff
+            };
+
+            vkCmdPushConstants(
+                cmd, shadowPipeline.layout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                sizeof(pushConstants), &pushConstants
+            );
+
+            // draw primitive
+            vkCmdDrawIndexed(cmd, draw.indexCount, 1, 0, 0, 0);
+        }
+
+        vkCmdEndRendering(cmd);
     }
-
-    vkCmdEndRendering(cmd);
 }
 
 void RenderEngine::renderSky(VkCommandBuffer cmd, VkImageView colorAttachView, VkImageView depthAttachView, VkExtent2D renderExtent)
