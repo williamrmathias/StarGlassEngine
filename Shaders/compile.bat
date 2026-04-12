@@ -29,3 +29,5 @@ dxc.exe -T ps_6_0 -E roughDebugPS -fspv-debug=vulkan-with-source -spirv -Fo roug
 dxc.exe -T ps_6_0 -E normalDebugPS -fspv-debug=vulkan-with-source -spirv -Fo normalDebugPS.spirv SimpleShader.hlsl > normalDebugPS.log 2>&1
 dxc.exe -T ps_6_0 -E vertNormalDebugPS -fspv-debug=vulkan-with-source -spirv -Fo vertNormalDebugPS.spirv SimpleShader.hlsl > vertNormalDebugPS.log 2>&1
 dxc.exe -T ps_6_0 -E uvDebugPS -fspv-debug=vulkan-with-source -spirv -Fo uvDebugPS.spirv SimpleShader.hlsl > uvDebugPS.log 2>&1
+dxc.exe -T ps_6_0 -E linearViewDepthDebugPS -fspv-debug=vulkan-with-source -spirv -Fo linearViewDepthDebugPS.spirv SimpleShader.hlsl > linearViewDepthDebugPS.log 2>&1
+dxc.exe -T ps_6_0 -E shadowCascadeDebugPS -fspv-debug=vulkan-with-source -spirv -Fo shadowCascadeDebugPS.spirv SimpleShader.hlsl > shadowCascadeDebugPS.log 2>&1

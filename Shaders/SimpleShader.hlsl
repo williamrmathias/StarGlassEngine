@@ -311,8 +311,8 @@ struct CascadeSample
 
 CascadeSample getCascadeSample(float linearViewDepth)
 {
-    #define NUM_CASCADES 3
-    #define CASCADE_BLEND_BAND 0.2
+    const uint kNumCascades = 3;
+    const float kBlendBand = 0.2f;
     
     const float viewSplits[] = { 0.f, 10.f, 100.f, 3.402823466e+38F }; // FLT_MAX
     const float viewDepth = clamp(linearViewDepth, 0.f, 1000.f);
@@ -322,20 +322,17 @@ CascadeSample getCascadeSample(float linearViewDepth)
     result.cascade1 = 0;
     result.blend = 0.f;
     
-    [unroll]
-    for (uint cascadeIdx = 0; cascadeIdx < NUM_CASCADES; ++cascadeIdx)
-    {
-        if (viewDepth >= viewSplits[cascadeIdx] && viewDepth < viewSplits[cascadeIdx + 1])
-            result.cascade0 = cascadeIdx;
-    }
+    result.cascade0 = (viewDepth >= viewSplits[1]) + (viewDepth >= viewSplits[2]);
     
-    const float blendStart = viewSplits[result.cascade0 + 1] * (1.f - CASCADE_BLEND_BAND);
-    if (viewDepth >= blendStart)
-    {
-        result.cascade1 = result.cascade0 + 1;
-        result.blend = (viewDepth - blendStart) / (viewSplits[result.cascade0 + 1] - blendStart);
-    }
+    const float splitEnd = viewSplits[result.cascade0 + 1];
+    const float blendStart = splitEnd * (1.f - kBlendBand);
     
+    result.blend = saturate((viewDepth - blendStart) / (splitEnd - blendStart));
+    
+    const uint isLast = (result.cascade0 == kNumCascades - 1);
+    result.blend *= (1 - isLast);
+    
+    result.cascade1 = min(result.cascade0 + (result.blend > 0.f), kNumCascades - 1);
     return result;
 }
 
@@ -498,5 +495,44 @@ PixelOutput uvDebugPS(VertexOutput input)
     PixelOutput result;
     
     result.color = float4(input.uv.xy, 0.f, 1.f);
+    return result;
+}
+
+PixelOutput linearViewDepthDebugPS(VertexOutput input)
+{
+    PixelOutput result;
+    
+    const float linearViewDepth = -mul(globalSceneData.view, float4(input.positionWorld, 1.f)).z;
+    result.color = float4(linearViewDepth / 100.f, 0.f, 0.f, 1.f);
+    
+    return result;
+}
+
+PixelOutput shadowCascadeDebugPS(VertexOutput input)
+{
+    PixelOutput result;
+    
+    const float linearViewDepth = -mul(globalSceneData.view, float4(input.positionWorld, 1.f)).z;
+    CascadeSample cascade = getCascadeSample(linearViewDepth);
+    
+    // static const float3 cascadeColorTable[] = { float3(1.f, 0.f, 0.f), float3(0.f, 1.f, 0.f), float3(0.f, 0.f, 1.f) }; -- amd driver bug with sampling
+    
+    float3 color0;
+    if (cascade.cascade0 == 0)
+        color0 = float3(1.f, 0.f, 0.f);
+    if (cascade.cascade0 == 1)
+        color0 = float3(0.f, 1.f, 0.f);
+    if (cascade.cascade0 == 2)
+        color0 = float3(0.f, 0.f, 1.f);
+    
+    float3 color1;
+    if (cascade.cascade1 == 0)
+        color1 = float3(1.f, 0.f, 0.f);
+    if (cascade.cascade1 == 1)
+        color1 = float3(0.f, 1.f, 0.f);
+    if (cascade.cascade1 == 2)
+        color1 = float3(0.f, 0.f, 1.f);
+    
+    result.color = float4(lerp(color0, color1, cascade.blend), 1.f);
     return result;
 }

@@ -202,6 +202,8 @@ public:
         NormalDebug,
         VertexNormalDebug,
         UvDebug,
+        LinearViewDepthDebug,
+        ShadowCascadeDebug,
 
         // screen space pipelines
         ToneMap,
@@ -219,6 +221,8 @@ public:
     Pipeline normalPipeline;
     Pipeline vertNormalPipeline;
     Pipeline uvPipeline;
+    Pipeline linearDepthPipeline;
+    Pipeline shadowCascadePipeline;
 
     Pipeline shadowPipeline;
 

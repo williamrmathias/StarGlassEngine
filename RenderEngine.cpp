@@ -351,6 +351,8 @@ void RenderEngine::cleanup()
         normalPipeline.cleanup(device.get());
         vertNormalPipeline.cleanup(device.get());
         uvPipeline.cleanup(device.get());
+        linearDepthPipeline.cleanup(device.get());
+        shadowCascadePipeline.cleanup(device.get());
 
         shadowPipeline.cleanup(device.get());
 
@@ -584,6 +586,12 @@ void RenderEngine::setActiveOpaquePassPipeline(PipelineType pipeline)
         break;
     case gfx::RenderEngine::PipelineType::UvDebug:
         activeOpaquePipeline = uvPipeline;
+        break;
+    case gfx::RenderEngine::PipelineType::LinearViewDepthDebug:
+        activeOpaquePipeline = linearDepthPipeline;
+        break;
+    case gfx::RenderEngine::PipelineType::ShadowCascadeDebug:
+        activeOpaquePipeline = shadowCascadePipeline;
         break;
     default:
         break;
@@ -1153,12 +1161,26 @@ void RenderEngine::initGraphicsPipelines()
         pipelineBuilder.setShaderStages(vertShader, "simpleVS", uvFragShader, "uvDebugPS");
         uvPipeline = pipelineBuilder.build(device.get());
 
+        // linear view depth
+        std::filesystem::path linearDepthFragShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/linearViewDepthDebugPS.spirv");
+        VkShaderModule linearDepthFragShader = loadShaderModule(linearDepthFragShaderPath.string().c_str());
+        pipelineBuilder.setShaderStages(vertShader, "simpleVS", linearDepthFragShader, "linearViewDepthDebugPS");
+        linearDepthPipeline = pipelineBuilder.build(device.get());
+
+        // shadow cascades
+        std::filesystem::path shadowCascadeFragShaderPath = std::filesystem::current_path() / std::filesystem::path("Shaders/shadowCascadeDebugPS.spirv");
+        VkShaderModule shadowCascadeFragShader = loadShaderModule(shadowCascadeFragShaderPath.string().c_str());
+        pipelineBuilder.setShaderStages(vertShader, "simpleVS", shadowCascadeFragShader, "shadowCascadeDebugPS");
+        shadowCascadePipeline = pipelineBuilder.build(device.get());
+
         vkDestroyShaderModule(device->device, baseColorFragShader, nullptr);
         vkDestroyShaderModule(device->device, metalFragShader, nullptr);
         vkDestroyShaderModule(device->device, roughFragShader, nullptr);
         vkDestroyShaderModule(device->device, normalFragShader, nullptr);
         vkDestroyShaderModule(device->device, vertNormalFragShader, nullptr);
         vkDestroyShaderModule(device->device, uvFragShader, nullptr);
+        vkDestroyShaderModule(device->device, linearDepthFragShader, nullptr);
+        vkDestroyShaderModule(device->device, shadowCascadeFragShader, nullptr);
     }
 
     activeOpaquePipeline = opaquePipeline;
