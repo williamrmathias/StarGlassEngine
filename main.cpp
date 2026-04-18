@@ -15,6 +15,9 @@
 #include <iostream>
 #include <chrono>
 
+constexpr uint32_t kScreenWidth = uint32_t(2560.f / 1.5f);
+constexpr uint32_t kScreenHeight = uint32_t(1440 / 1.5f);
+
 int main()
 {
     // Create an SDL window that supports Vulkan rendering.
@@ -24,7 +27,7 @@ int main()
         return 1;
     }
     SDL_Window* window = SDL_CreateWindow("Vulkan Window", SDL_WINDOWPOS_CENTERED,
-                                          SDL_WINDOWPOS_CENTERED, 2560 / 1.5, 1440 / 1.5, SDL_WINDOW_VULKAN);
+                                          SDL_WINDOWPOS_CENTERED, kScreenWidth, kScreenHeight, SDL_WINDOW_VULKAN);
     if (window == nullptr)
     {
         SDL_LogError(0, "Detected SDL Error: Could not create SDL window\n");
@@ -101,6 +104,18 @@ int main()
                 static float luminance = 20.f;
                 if (ImGui::SliderFloat("Sun: Luminance", &luminance, 0.f, 100.f))
                     renderEngine.setSunLuminance(luminance);
+            }
+
+            if (ImGui::CollapsingHeader("Resolution Settings"))
+            {
+                static float mainViewResolutionScale = 1.f;
+                if (ImGui::SliderFloat("Main View Resolution Scale", &mainViewResolutionScale, 0.1f, 2.f))
+                    renderEngine.setMainViewExtents(VkExtent2D{ .width = uint32_t(mainViewResolutionScale * kScreenWidth), .height = uint32_t(mainViewResolutionScale * kScreenHeight) });
+
+                static float shadowMapResolutionScale = 1.f;
+                constexpr uint32_t kDefaultShadowResolution = 4096;
+                if (ImGui::SliderFloat("Shadow Map Resolution Scale", &shadowMapResolutionScale, 0.1f, 2.f))
+                    renderEngine.setShadowMapExtents(VkExtent2D{ .width = uint32_t(shadowMapResolutionScale * kDefaultShadowResolution), .height = uint32_t(shadowMapResolutionScale * kDefaultShadowResolution) });
             }
 
             if (ImGui::CollapsingHeader("Tone Mapping Settings"))

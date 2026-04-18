@@ -58,6 +58,21 @@ void RenderEngine::render()
     VK_Check(vkWaitForFences(
         device->device, 1, &frame.renderFence, VK_TRUE, 1'000'000'000));
 
+    if (invFlags != InvalidationFlags::None)
+    {
+        vkDeviceWaitIdle(device->device);
+        if (invFlags & InvalidationFlags::MainRenderTargets)
+        {
+            recreateMainRenderTargets(mainViewExtents);
+            invFlags &= ~InvalidationFlags::MainRenderTargets;
+        }
+        if (invFlags & InvalidationFlags::ShadowMapTargets)
+        {
+            recreateCascadedShadowMap(shadowMapExtents);
+            invFlags &= ~InvalidationFlags::ShadowMapTargets;
+        }
+    }
+
     // acquire image to draw to
     uint32_t swapchainIdx;
     VK_Check(vkAcquireNextImageKHR(
@@ -93,6 +108,12 @@ void RenderEngine::render()
 
     transitionImageLayoutCoarse(
         cmd, depthTargetMSAA.image.image,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_ASPECT_DEPTH_BIT
+    );
+
+    transitionImageLayoutCoarse(
+        cmd, depthTargetResolve.image.image,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
         VK_IMAGE_ASPECT_DEPTH_BIT
     );
@@ -151,9 +172,9 @@ void RenderEngine::render()
         .pNext = nullptr,
         .imageView = depthTargetMSAA.view,
         .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-        .resolveMode = VK_RESOLVE_MODE_NONE,
-        .resolveImageView = VK_NULL_HANDLE,
-        .resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .resolveMode = VK_RESOLVE_MODE_MIN_BIT,
+        .resolveImageView = depthTargetResolve.view,
+        .resolveImageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
         .clearValue = VkClearValue{.depthStencil = VkClearDepthStencilValue{.depth = 1.f, .stencil = 1}}
@@ -196,21 +217,10 @@ void RenderEngine::render()
     // end rendering
     vkCmdEndRendering(cmd);
 
-    renderSky(cmd, hdrColorTargetResolve.view, depthTargetMSAA.view, hdrColorTargetResolve.image.extents);
+    renderSky(cmd, hdrColorTargetResolve.view, depthTargetResolve.view, hdrColorTargetResolve.image.extents);
 
     VkImage swapchainImage = device->swapchain.swapchainImages[swapchainIdx];
     VkImageView swapchainImageView = device->swapchain.swapchainImageViews[swapchainIdx];
-
-    VkExtent3D colorImageExtent{
-        hdrColorTargetResolve.image.extents.width,
-        hdrColorTargetResolve.image.extents.height,
-        1
-    };
-    VkExtent3D swapchainExtent{
-        device->swapchain.swapchainExtent.width,
-        device->swapchain.swapchainExtent.height,
-        1
-    };
 
     // transition hdr color buffer to readable layout for postFX pass
     transitionImageLayoutCoarse(
@@ -373,7 +383,9 @@ void RenderEngine::cleanup()
     }
 
     hdrColorTargetMSAA.cleanup(device.get());
+    hdrColorTargetResolve.cleanup(device.get());
     depthTargetMSAA.cleanup(device.get());
+    depthTargetResolve.cleanup(device.get());
     csm.cleanup(device.get());
 
     vkDestroySampler(device->device, screenSpaceSampler, nullptr);
@@ -431,14 +443,23 @@ void RenderEngine::endAndSubmitImmediateCommands()
     VK_Check(vkWaitForFences(device->device, 1, &immediateFence, true, 9'999'999'999));
 }
 
-static void computeShadowMatrices(const glm::vec3& lightDir, const glm::mat4& cameraView, const glm::mat4& cameraProj, const Extent& sceneAABB, glm::mat4* const shadowMatrices)
+struct ComputeShadowMatricesParams
+{
+    glm::vec3 lightDir;
+    glm::mat4 cameraView;
+    glm::mat4 cameraProj;
+    Extent sceneAABB;
+    VkExtent2D shadowMapExtent;
+};
+
+static void computeShadowMatrices(const ComputeShadowMatricesParams& params, glm::mat4* const shadowMatrices)
 {
     // light view matrix looking from the light direction towards the origin
-    glm::vec3 up = lightDir.y == 1.f || lightDir.y == -1.f ? glm::vec3{ 0.f, 0.f, 1.f } : glm::vec3{ 0.f, 1.f, 0.f };
-    glm::mat4 shadowView = glm::lookAt(lightDir, glm::vec3{ 0.f, 0.f, 0.f }, up);
+    glm::vec3 up = params.lightDir.y == 1.f || params.lightDir.y == -1.f ? glm::vec3{ 0.f, 0.f, 1.f } : glm::vec3{ 0.f, 1.f, 0.f };
+    glm::mat4 shadowView = glm::lookAt(params.lightDir, glm::vec3{ 0.f, 0.f, 0.f }, up);
 
     // transform scene AABB into light space
-    std::array<glm::vec3, 8> sceneCorners = sceneAABB.getCorners();
+    std::array<glm::vec3, 8> sceneCorners = params.sceneAABB.getCorners();
 
     float sceneMinX = FLT_MAX, sceneMinY = FLT_MAX, sceneMinZ = FLT_MAX;
     float sceneMaxX = -FLT_MAX, sceneMaxY = -FLT_MAX, sceneMaxZ = -FLT_MAX;
@@ -461,8 +482,8 @@ static void computeShadowMatrices(const glm::vec3& lightDir, const glm::mat4& ca
         // transform view frustum into light space
         // NDC = [-1,1]x[-1,1]x[0,1]
 
-        glm::vec4 nearClip = cameraProj * glm::vec4{ 0.f, 0.f, -viewSplits[0], 1.f };
-        glm::vec4 farClip = cameraProj * glm::vec4{ 0.f, 0.f, -viewSplits[cascadeIdx+1], 1.f };
+        glm::vec4 nearClip = params.cameraProj * glm::vec4{ 0.f, 0.f, -viewSplits[0], 1.f };
+        glm::vec4 farClip = params.cameraProj * glm::vec4{ 0.f, 0.f, -viewSplits[cascadeIdx+1], 1.f };
 
         const float zNearNDC = 0.f;
         const float zFarNDC = farClip.z / farClip.w;
@@ -483,7 +504,7 @@ static void computeShadowMatrices(const glm::vec3& lightDir, const glm::mat4& ca
         for (const glm::vec4& corner : ndcCorners)
         {
             // 1. NDC -> WorldSpace w/ perspective divide
-            glm::vec4 lightSpacePos = glm::inverse(cameraProj * cameraView) * corner;
+            glm::vec4 lightSpacePos = glm::inverse(params.cameraProj * params.cameraView) * corner;
             lightSpacePos /= lightSpacePos.w;
 
             // 2. WorldSpace -> LightSpace
@@ -508,8 +529,8 @@ static void computeShadowMatrices(const glm::vec3& lightDir, const glm::mat4& ca
         const float shadowWidth = (right - left);
         const float shadowHeight = (top - bottom);
 
-        const float texelSizeX = shadowWidth / float(kShadowMapResolution.width);
-        const float texelSizeY = shadowHeight / float(kShadowMapResolution.height);
+        const float texelSizeX = shadowWidth / float(params.shadowMapExtent.width);
+        const float texelSizeY = shadowHeight / float(params.shadowMapExtent.height);
 
         // 2. Snap center
         float centerX = (left + right) * 0.5f;
@@ -543,7 +564,15 @@ void RenderEngine::setSunDirection(float azimuth, float altitude)
 
     glm::mat4 projection = glm::perspective(glm::radians(45.f), 2560.f / 1440.f, 0.1f, 1000.f);
     projection[1][1] *= -1; // correct gl -> vk
-    computeShadowMatrices(globalSceneData.lightDirection, globalSceneData.view, projection, sceneAABB, globalSceneData.shadowMatrices);
+
+    ComputeShadowMatricesParams params{
+        .lightDir = globalSceneData.lightDirection,
+        .cameraView = globalSceneData.view,
+        .cameraProj = projection,
+        .sceneAABB = sceneAABB,
+        .shadowMapExtent = shadowMapExtents
+    };
+    computeShadowMatrices(params, globalSceneData.shadowMatrices);
 }
 
 void RenderEngine::setSunLuminance(float luminance)
@@ -559,7 +588,14 @@ void RenderEngine::setViewMatrix(const glm::mat4 view)
     globalSceneData.view = view;
     globalSceneData.viewproj = projection * view;
 
-    computeShadowMatrices(globalSceneData.lightDirection, globalSceneData.view, projection, sceneAABB, globalSceneData.shadowMatrices);
+    ComputeShadowMatricesParams params{
+        .lightDir = globalSceneData.lightDirection,
+        .cameraView = globalSceneData.view,
+        .cameraProj = projection,
+        .sceneAABB = sceneAABB,
+        .shadowMapExtent = shadowMapExtents
+    };
+    computeShadowMatrices(params, globalSceneData.shadowMatrices);
 }
 
 void RenderEngine::setViewPosition(const glm::vec3 viewPosition)
@@ -618,7 +654,7 @@ void RenderEngine::setActiveScreenSpacePipeline(PipelineType pipeline)
     }
 }
 
-RenderTarget RenderEngine::createHDRColorTargetMSAA() const
+RenderTarget RenderEngine::createHDRColorTargetMSAA(VkExtent2D extent) const
 {
     RenderTarget target;
 
@@ -637,14 +673,14 @@ RenderTarget RenderEngine::createHDRColorTargetMSAA() const
     target.image = gfx::createAllocatedMultiSampleImage(
         device.get(),
         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-        colorFormat, device->swapchain.swapchainExtent, VK_SAMPLE_COUNT_8_BIT
+        colorFormat, extent, VK_SAMPLE_COUNT_8_BIT
     );
 
     target.view = createImageView(device.get(), target.image.image, target.image.format, VK_IMAGE_ASPECT_COLOR_BIT);
     return target;
 }
 
-RenderTarget RenderEngine::createHDRColorTargetResolve() const
+RenderTarget RenderEngine::createHDRColorTargetResolve(VkExtent2D extent) const
 {
     RenderTarget target;
 
@@ -663,14 +699,14 @@ RenderTarget RenderEngine::createHDRColorTargetResolve() const
     target.image = gfx::createAllocatedImage(
         device.get(),
         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-        colorFormat, device->swapchain.swapchainExtent, /*useMips=*/false
+        colorFormat, extent, /*useMips=*/false
     );
 
     target.view = createImageView(device.get(), target.image.image, target.image.format, VK_IMAGE_ASPECT_COLOR_BIT);
     return target;
 }
 
-RenderTarget RenderEngine::createDepthTargetMSAA() const
+RenderTarget RenderEngine::createDepthTargetMSAA(VkExtent2D extent) const
 {
     RenderTarget target;
 
@@ -689,7 +725,7 @@ RenderTarget RenderEngine::createDepthTargetMSAA() const
     target.image = gfx::createAllocatedMultiSampleImage(
         device.get(), 
         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 
-        depthFormat, device->swapchain.swapchainExtent, VK_SAMPLE_COUNT_8_BIT
+        depthFormat, extent, VK_SAMPLE_COUNT_8_BIT
     );
 
     target.view = createImageView(device.get(), target.image.image, target.image.format, VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -697,7 +733,34 @@ RenderTarget RenderEngine::createDepthTargetMSAA() const
     return target;
 }
 
-CascadedShadowMap RenderEngine::createCascadedShadowMap() const
+RenderTarget RenderEngine::createDepthTargetResolve(VkExtent2D extent) const
+{
+    RenderTarget target;
+
+    VkFormat depthFormat = VK_FORMAT_D16_UNORM;
+
+    // get depth format
+    VkFormatProperties formatProps;
+    vkGetPhysicalDeviceFormatProperties(device->physicalDevice, depthFormat, &formatProps);
+    bool supportsFormat = formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    if (!supportsFormat)
+    {
+        SDL_LogError(0, "Depth image error: format not supported by device\n");
+        std::abort();
+    }
+
+    target.image = gfx::createAllocatedImage(
+        device.get(),
+        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        depthFormat, extent, /*useMips=*/false
+    );
+
+    target.view = createImageView(device.get(), target.image.image, target.image.format, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+    return target;
+}
+
+CascadedShadowMap RenderEngine::createCascadedShadowMap(VkExtent2D extent) const
 {
     CascadedShadowMap csm;
 
@@ -716,7 +779,7 @@ CascadedShadowMap RenderEngine::createCascadedShadowMap() const
     csm.imageArray = gfx::createAllocatedImageArray(
         device.get(),
         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-        depthFormat, kShadowMapResolution, kShadowMapCascades
+        depthFormat, extent, kShadowMapCascades
     );
 
     for (uint32_t cascadeIdx = 0; cascadeIdx < kShadowMapCascades; ++cascadeIdx)
@@ -729,10 +792,83 @@ CascadedShadowMap RenderEngine::createCascadedShadowMap() const
 
 void RenderEngine::initRenderTargets()
 {
-    hdrColorTargetMSAA = createHDRColorTargetMSAA();
-    hdrColorTargetResolve = createHDRColorTargetResolve();
-    depthTargetMSAA = createDepthTargetMSAA();
-    csm = createCascadedShadowMap();
+    mainViewExtents = device->swapchain.swapchainExtent;
+    shadowMapExtents = VkExtent2D{ 4096, 4096 };
+
+    hdrColorTargetMSAA = createHDRColorTargetMSAA(mainViewExtents);
+    hdrColorTargetResolve = createHDRColorTargetResolve(mainViewExtents);
+    depthTargetMSAA = createDepthTargetMSAA(mainViewExtents);
+    depthTargetResolve = createDepthTargetResolve(mainViewExtents);
+    csm = createCascadedShadowMap(shadowMapExtents);
+}
+
+void RenderEngine::recreateMainRenderTargets(VkExtent2D extent)
+{
+    hdrColorTargetMSAA.cleanup(device.get());
+    hdrColorTargetResolve.cleanup(device.get());
+    depthTargetMSAA.cleanup(device.get());
+    depthTargetResolve.cleanup(device.get());
+
+    hdrColorTargetMSAA = createHDRColorTargetMSAA(extent);
+    hdrColorTargetResolve = createHDRColorTargetResolve(extent);
+    depthTargetMSAA = createDepthTargetMSAA(extent);
+    depthTargetResolve = createDepthTargetResolve(extent);
+
+    // update post FX descriptors
+    for (size_t i = 0; i < NUM_FRAMES; i++)
+    {
+        VkDescriptorImageInfo imageInfo{
+            .sampler = screenSpaceSampler,
+            .imageView = hdrColorTargetResolve.view,
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        };
+
+        VkWriteDescriptorSet write{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = nullptr,
+            .dstSet = frames[i].screenSpaceDescriptorSet,
+            .dstBinding = 0,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &imageInfo,
+            .pBufferInfo = nullptr,
+            .pTexelBufferView = nullptr
+        };
+
+        vkUpdateDescriptorSets(device->device, 1, &write, 0, nullptr);
+    }
+}
+
+void RenderEngine::recreateCascadedShadowMap(VkExtent2D extent)
+{
+    csm.cleanup(device.get());
+    csm = createCascadedShadowMap(extent);
+
+    // update csm descriptor sets
+    for (size_t i = 0; i < NUM_FRAMES; i++)
+    {
+        VkDescriptorImageInfo imageInfo{
+            .sampler = screenSpaceSampler,
+            .imageView = csm.shaderView,
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        };
+
+        VkWriteDescriptorSet write{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = nullptr,
+            .dstSet = frames[i].csmDescriptorSet,
+            .dstBinding = 0,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &imageInfo,
+            .pBufferInfo = nullptr,
+            .pTexelBufferView = nullptr
+        };
+
+        vkUpdateDescriptorSets(device->device, 1, &write, 0, nullptr);
+    }
 }
 
 void RenderEngine::initDescriptorPool()
@@ -1067,7 +1203,7 @@ void RenderEngine::initFrameData()
     for (size_t i = 0; i < NUM_FRAMES; i++)
         frames[i].csmDescriptorSet = descriptorSets[i];
 
-    // update screen space descriptor sets
+    // update csm descriptor sets
     for (size_t i = 0; i < NUM_FRAMES; i++)
     {
         VkDescriptorImageInfo imageInfo{

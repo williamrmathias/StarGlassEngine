@@ -46,7 +46,6 @@ namespace gfx
 constexpr size_t NUM_FRAMES = 2;
 constexpr uint32_t NUM_MATERIALS_MAX = 1000;
 
-constexpr VkExtent2D kShadowMapResolution = VkExtent2D{ 4096, 4096 };
 constexpr uint32_t kShadowMapCascades = 3;
 
 struct GlobalSceneData
@@ -150,6 +149,14 @@ public:
     std::unique_ptr<LoadedGltf> loadedGltf;
     Extent sceneAABB;
 
+    enum InvalidationFlags
+    {
+        None = 0,
+        MainRenderTargets = 1 << 0,
+        ShadowMapTargets  = 1 << 1
+    };
+    uint8_t invFlags = InvalidationFlags::None;
+
     std::vector<DrawCommand> renderQueueOpaque;
     std::vector<DrawCommand> renderQueueAlphaBlend;
 
@@ -159,9 +166,13 @@ public:
 
     // intermediate render targets
     RenderTarget hdrColorTargetMSAA;
-    RenderTarget depthTargetMSAA;
     RenderTarget hdrColorTargetResolve;
+    RenderTarget depthTargetMSAA;
+    RenderTarget depthTargetResolve;
     CascadedShadowMap csm;
+
+    VkExtent2D mainViewExtents;
+    VkExtent2D shadowMapExtents;
 
     AllocatedImage skybox;
 
@@ -248,6 +259,8 @@ public:
     void setActiveOpaquePassPipeline(PipelineType pipeline);
     void setActiveScreenSpacePipeline(PipelineType pipeline);
     void setExposure(float exposureIn) { exposure = exposureIn; }
+    void setMainViewExtents(VkExtent2D extents) { mainViewExtents = extents; invFlags |= InvalidationFlags::MainRenderTargets; }
+    void setShadowMapExtents(VkExtent2D extents) { shadowMapExtents = extents; invFlags |= InvalidationFlags::ShadowMapTargets; }
 
     VkCommandBuffer startImmediateCommands();
     void endAndSubmitImmediateCommands();
@@ -261,12 +274,16 @@ private:
     GlobalSceneData globalSceneData;
     float exposure = 1.f;
 
-    RenderTarget createHDRColorTargetMSAA() const;
-    RenderTarget createHDRColorTargetResolve() const;
-    RenderTarget createDepthTargetMSAA() const;
-    CascadedShadowMap createCascadedShadowMap() const;
+    RenderTarget createHDRColorTargetMSAA(VkExtent2D extent) const;
+    RenderTarget createHDRColorTargetResolve(VkExtent2D extent) const;
+    RenderTarget createDepthTargetMSAA(VkExtent2D extent) const;
+    RenderTarget createDepthTargetResolve(VkExtent2D extent) const;
+    CascadedShadowMap createCascadedShadowMap(VkExtent2D extent) const;
 
     void initRenderTargets();
+    void recreateMainRenderTargets(VkExtent2D extent);
+    void recreateCascadedShadowMap(VkExtent2D extent);
+
     void initDescriptorPool();
     void initImmediateStructures();
     void initFrameData();

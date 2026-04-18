@@ -176,10 +176,6 @@ void GraphicsPipelineBuilder::setPolygonMode(VkPolygonMode polygonMode)
 
 void GraphicsPipelineBuilder::setSampleCount(VkSampleCountFlagBits sampleCount)
 {
-    // todo: Multisampling
-    if (sampleCount != VK_SAMPLE_COUNT_1_BIT)
-        assert(!"GraphicsPipelineBuilderError: Multisampled Pipelines Not Supported!");
-
     multisampleInfo.rasterizationSamples = sampleCount;
 }
 
